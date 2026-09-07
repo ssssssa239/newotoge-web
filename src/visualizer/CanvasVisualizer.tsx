@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { MidiSongData, ChannelCache } from '../models/SongModels';
+import { MidiSongData } from '../models/SongModels';
 import { PlaybackEngine } from '../engine/audio/PlaybackEngine';
 
 interface Props {
@@ -11,19 +11,77 @@ interface Props {
   showDebugHUD?: boolean;
 }
 
-const LANE_COLORS = [
-  'rgba(0, 217, 255, 0.85)',
-  'rgba(51, 230, 77, 0.85)',
-  'rgba(255, 217, 26, 0.85)',
-  'rgba(255, 140, 0, 0.85)',
-  'rgba(255, 51, 153, 0.85)',
-  'rgba(179, 77, 242, 0.85)',
-  'rgba(0, 242, 179, 0.85)',
-  'rgba(89, 89, 255, 0.85)',
-  'rgba(26, 204, 204, 0.85)',
-  'rgba(51, 128, 255, 0.85)'
-];
-const UNASSIGNED_COLOR = 'rgba(115, 115, 122, 0.55)';
+// =================================================================
+// 楽器プリセットIDごとの固有カラー定義（仮色）
+// ※ 後からここを書き換えることで、各楽器の色を自由に変更できます
+// =================================================================
+export const PRESET_COLORS: Record<number, string> = {
+  0: 'rgba(115, 115, 122, 0.45)', // None (未割当・グレー)
+  1: '#00C2FF',   // KeyHarmonica (シアン)
+  2: '#FFE600',   // AcousticGuitar (オレンジ)
+  3: '#FF3399',   // PowerChordGT (レッド)
+  4: '#39E639',  // LEADGT_DOUBLE (ピンク)
+  5: '#178317', // LEADGT_PEDALBEND (ライトピンク)
+  6: '#FE8800',  // AltoSax (ゴールド/イエロー)
+  7: '#a95400',   // AltoSax_PedalBend (ダークイエロー)
+  8: '#FF4D4D',   // SopranoSax (ライムグリーン)
+  9: '#B266FF',  // Other (パープル)
+};
+
+interface VisualizerLane {
+  channel: number;
+  title: string;
+  presetId: number;
+  isAssigned: boolean;
+  color: string;
+  noteCount: number;
+}
+
+// レーン情報の算出ヘルパー
+function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): VisualizerLane[] {
+  if (!song) return [];
+  const activeSlots = song.slots.filter(s => s.isEnabled && s.assignedPreset.id !== 0);
+
+  if (!showAllChannels) {
+    return activeSlots.map(slot => {
+      const count = song.channelCaches[slot.selectedChannel]?.noteCount ?? 0;
+      const color = PRESET_COLORS[slot.assignedPreset.id] ?? PRESET_COLORS[9];
+      return {
+        channel: slot.selectedChannel,
+        title: slot.assignedPreset.name,
+        presetId: slot.assignedPreset.id,
+        isAssigned: true,
+        color,
+        noteCount: count
+      };
+    });
+  } else {
+    return song.usedChannels.map(ch => {
+      const count = song.channelCaches[ch]?.noteCount ?? 0;
+      const slot = activeSlots.find(s => s.selectedChannel === ch);
+      if (slot) {
+        const color = PRESET_COLORS[slot.assignedPreset.id] ?? PRESET_COLORS[9];
+        return {
+          channel: ch,
+          title: slot.assignedPreset.name,
+          presetId: slot.assignedPreset.id,
+          isAssigned: true,
+          color,
+          noteCount: count
+        };
+      } else {
+        return {
+          channel: ch,
+          title: 'None',
+          presetId: 0,
+          isAssigned: false,
+          color: PRESET_COLORS[0],
+          noteCount: count
+        };
+      }
+    });
+  }
+}
 
 export const CanvasVisualizer: React.FC<Props> = ({
   song,
@@ -35,6 +93,9 @@ export const CanvasVisualizer: React.FC<Props> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hudText, setHudText] = useState('');
+
+  // 表示するレーン一覧を算出
+  const lanes = getRenderLanes(song, showAllChannels);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -71,11 +132,11 @@ export const CanvasVisualizer: React.FC<Props> = ({
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      // 背景クリア（通常: #121217 / クロマキー: #00FF00）
-      ctx.fillStyle = isChromaKeyEnabled ? '#00FF00' : '#121217';
+      // 背景クリア（通常: #0A0E1A / クロマキー: #00FF00）
+      ctx.fillStyle = isChromaKeyEnabled ? '#00FF00' : '#0A0E1A';
       ctx.fillRect(0, 0, width, height);
 
-      if (!song) {
+      if (!song || lanes.length === 0) {
         ctx.restore();
         animId = requestAnimationFrame(render);
         return;
@@ -85,30 +146,6 @@ export const CanvasVisualizer: React.FC<Props> = ({
       const currentMs = engine.getCurrentPlaybackMs();
       const judgeLineY = height * 0.8;
       const speed = scrollSpeedPxPerMs;
-
-      // レーン決定
-      const activeSlots = song.slots.filter(s => s.isEnabled && s.assignedPreset.id !== 0);
-      const lanes = showAllChannels
-        ? song.usedChannels.map((ch, idx) => {
-            const slot = activeSlots.find(s => s.selectedChannel === ch);
-            return {
-              channel: ch,
-              isAssigned: !!slot,
-              color: slot ? LANE_COLORS[idx % LANE_COLORS.length] : UNASSIGNED_COLOR
-            };
-          })
-        : activeSlots.map((s, idx) => ({
-            channel: s.selectedChannel,
-            isAssigned: true,
-            color: LANE_COLORS[idx % LANE_COLORS.length]
-          }));
-
-      if (lanes.length === 0) {
-        ctx.restore();
-        animId = requestAnimationFrame(render);
-        return;
-      }
-
       const laneWidth = width / lanes.length;
 
       // 1. 小節/拍グリッド線
@@ -137,14 +174,14 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
       // 2. 判定ライン
       if (!isChromaKeyEnabled) {
-        ctx.fillStyle = 'rgba(0, 217, 255, 0.35)';
+        ctx.fillStyle = 'rgba(126, 202, 220, 0.35)';
         ctx.fillRect(0, judgeLineY - 2, width, 6);
       }
-      ctx.fillStyle = isChromaKeyEnabled ? '#000000' : 'rgba(255, 255, 255, 0.85)';
+      ctx.fillStyle = isChromaKeyEnabled ? '#101F33' : 'rgba(255, 255, 255, 0.85)';
       ctx.fillRect(0, judgeLineY, width, 2.5);
 
       // 3. レーン境界線
-      ctx.strokeStyle = isChromaKeyEnabled ? 'rgba(0, 0, 0, 0.3)' : 'rgba(255, 255, 255, 0.15)';
+      ctx.strokeStyle = isChromaKeyEnabled ? 'rgba(0, 0, 0, 0.3)' : 'rgba(36, 59, 84, 0.7)';
       ctx.lineWidth = 1.5;
       for (let i = 1; i < lanes.length; i++) {
         const x = i * laneWidth;
@@ -181,16 +218,19 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
           const isHit = currentMs >= note.startTimeMs && currentMs <= note.endTimeMs;
 
-          ctx.fillStyle = isHit ? '#FFFFFF' : lane.color;
+          // ノーツ本体の塗りと枠線（ヒット時は指定の淡い青白 #E2EFFF で発光）
+          ctx.fillStyle = isHit ? '#E2EFFF' : lane.color;
           ctx.beginPath();
           ctx.roundRect(x, yTop, noteWidth, noteHeight, 2.5);
           ctx.fill();
 
+          /*
           if (!isChromaKeyEnabled) {
             ctx.strokeStyle = isHit ? lane.color : 'rgba(255, 255, 255, 0.35)';
             ctx.lineWidth = isHit ? 2 : 0.8;
             ctx.stroke();
           }
+          */
         }
       }
 
@@ -200,29 +240,104 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
     animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [song, scrollSpeedPxPerMs, isChromaKeyEnabled, showGridLines, showAllChannels]);
+  }, [song, lanes, scrollSpeedPxPerMs, isChromaKeyEnabled, showGridLines]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
-      {showDebugHUD && (
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
+      {/* 1. 各レーンの上部ヘッダーバー (送信先楽器名のみ表示) */}
+      {lanes.length > 0 && (
         <div
           style={{
-            position: 'absolute',
-            bottom: 12,
-            right: 12,
-            background: 'rgba(0, 0, 0, 0.85)',
-            color: '#FFF',
-            padding: '6px 10px',
-            borderRadius: 6,
-            fontFamily: 'monospace',
-            fontSize: 11,
-            pointerEvents: 'none'
+            display: 'flex',
+            width: '100%',
+            height: 30,
+            flexShrink: 0,
+            borderBottom: '2px solid #243B54',
+            background: isChromaKeyEnabled ? '#CBD7E6' : '#36485E'
           }}
         >
-          {hudText}
+          {lanes.map((lane, index) => (
+            <div
+              key={`${lane.channel}_${index}`}
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderLeft: index > 0 ? (isChromaKeyEnabled ? '1px solid rgba(0,0,0,0.2)' : '1px solid #243B54') : 'none',
+                position: 'relative',
+                overflow: 'hidden',
+                padding: '0 6px'
+              }}
+            >
+              {/* 送信先楽器名 */}
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 'bold',
+                  color: isChromaKeyEnabled
+                    ? '#101F33'
+                    : lane.isAssigned ? '#E2EFFF' : '#8FA4C4',
+                  whiteSpace: 'nowrap',
+                  textOverflow: 'ellipsis',
+                  overflow: 'hidden',
+                  maxWidth: '100%',
+                  textAlign: 'center'
+                }}
+              >
+                {lane.title}
+              </div>
+
+              {/* レーン下部の固有カラーアクセントライン */}
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: 3,
+                  background: lane.color
+                }}
+              />
+            </div>
+          ))}
         </div>
       )}
+
+      {/* 2. Canvas 描画エリア */}
+      <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+        <canvas
+          ref={canvasRef}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            display: 'block'
+          }}
+        />
+
+        {showDebugHUD && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 12,
+              right: 12,
+              background: 'rgba(0, 0, 0, 0.85)',
+              color: '#E2EFFF',
+              padding: '6px 10px',
+              borderRadius: 6,
+              fontFamily: 'monospace',
+              fontSize: 11,
+              pointerEvents: 'none',
+              zIndex: 10
+            }}
+          >
+            {hudText}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

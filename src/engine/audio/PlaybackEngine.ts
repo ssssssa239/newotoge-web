@@ -36,7 +36,23 @@ export class PlaybackEngine {
   public totalDurationMs = 0;
 
   public isMetronomeEnabled = true;
-  public isBgmEnabled = true;
+
+  // BGM 有効/無効フラグ (GainNode と連動)
+  private _isBgmEnabled = true;
+
+  public get isBgmEnabled(): boolean {
+    return this._isBgmEnabled;
+  }
+
+  public set isBgmEnabled(enabled: boolean) {
+    this._isBgmEnabled = enabled;
+    if (this.bgmGain && this.audioCtx) {
+      this.bgmGain.gain.setValueAtTime(
+        enabled ? 1 : 0,
+        this.audioCtx.currentTime
+      );
+    }
+  }
 
   // MIDIスケジューリング
   private activeSong: MidiSongData | null = null;
@@ -64,6 +80,7 @@ export class PlaybackEngine {
       this.audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
 
       this.bgmGain = this.audioCtx.createGain();
+      this.bgmGain.gain.value = this._isBgmEnabled ? 1 : 0;
       this.bgmGain.connect(this.audioCtx.destination);
 
       this.createClickBuffers(this.audioCtx);
@@ -306,11 +323,15 @@ export class PlaybackEngine {
   }
 
   private playBgm(fromMs: number): void {
-    if (!this.audioCtx || !this.bgmBuffer || !this.isBgmEnabled) return;
+    if (!this.audioCtx || !this.bgmBuffer) return;
     this.stopBgm();
 
     const startSec = fromMs / 1000.0;
     if (startSec >= this.bgmBuffer.duration) return;
+
+    if (this.bgmGain) {
+      this.bgmGain.gain.setValueAtTime(this._isBgmEnabled ? 1 : 0, this.audioCtx.currentTime);
+    }
 
     this.bgmSource = this.audioCtx.createBufferSource();
     this.bgmSource.buffer = this.bgmBuffer;
