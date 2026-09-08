@@ -5,7 +5,7 @@ import { MidiParser } from './engine/parser/MidiParser';
 import { StorageManager, SongMetadata } from './storage/StorageManager';
 import { MidiSongData, EnsemblePreset, LaneSlot } from './models/SongModels';
 import { UnifiedMidiEndpoint } from './engine/midi/types';
-import { INSTRUMENT_PRESETS } from './models/InstrumentPreset';
+import { loadRegisteredPresets, InstrumentPreset, NONE_PRESET } from './models/InstrumentPreset';
 import { CanvasVisualizer } from './visualizer/CanvasVisualizer';
 
 export function App() {
@@ -14,8 +14,46 @@ export function App() {
   const [endpoints, setEndpoints] = useState<UnifiedMidiEndpoint[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
 
+  // 永続化されたMCU一覧（手動バインド用）および接続中デバイスから動的生成されたターゲット一覧（#1, #2 枝番付き）
+  const [knownPresets, setKnownPresets] = useState<InstrumentPreset[]>(() => loadRegisteredPresets());
+  const [availableTargets, setAvailableTargets] = useState<InstrumentPreset[]>(() =>
+    MidiDeviceManager.getInstance().getAvailableMcuTargets()
+  );
+
   // サイドバー表示・非表示フラグ
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  // MIDIデバイスパネルの高さ管理 (初期値 260px)
+  const [devicePanelHeight, setDevicePanelHeight] = useState(260);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+
+  // 境界線のドラッグ開始処理
+  const handleStartResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingSidebar(true);
+
+    const startY = e.clientY;
+    const initialHeight = devicePanelHeight;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      // 下にドラッグするとYが増え、デバイス一覧の高さは小さくなる
+      const deltaY = moveEvent.clientY - startY;
+      const nextHeight = initialHeight - deltaY;
+
+      // 最小 100px、最大 550px の範囲にクランプ
+      const clamped = Math.min(Math.max(100, nextHeight), 550);
+      setDevicePanelHeight(clamped);
+    };
+
+    const onMouseUp = () => {
+      setIsResizingSidebar(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
 
   // 編成プリセット
   const [presets, setPresets] = useState<EnsemblePreset[]>([{ id: 'default', name: 'プリセット 1', songSlots: {} }]);
@@ -80,11 +118,30 @@ export function App() {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
-  // --- 1. 起動時：IndexedDB から楽曲・BGM・プリセット・スロットを完全復元 ---
+  // ミリ秒を YouTube 風の「分:秒 (m:ss)」形式に変換
+  const formatTime = (ms: number) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const formattedSec = seconds.toString().padStart(2, '0');
+
+    if (hours > 0) {
+      const formattedMin = minutes.toString().padStart(2, '0');
+      return `${hours}:${formattedMin}:${formattedSec}`;
+    }
+    return `${minutes}:${formattedSec}`;
+  };
+
+  // --- 1. 起動時：IndexedDB から楽曲・BGM・プリセット・スロットを復元 ---
   useEffect(() => {
     const midiMgr = MidiDeviceManager.getInstance();
     midiMgr.initWebMidi();
-    const unsubMidi = midiMgr.subscribe(setEndpoints);
+    const unsubMidi = midiMgr.subscribe(newEndpoints => {
+      setEndpoints(newEndpoints);
+      setKnownPresets(loadRegisteredPresets());
+      setAvailableTargets(midiMgr.getAvailableMcuTargets());
+    });
 
     const engine = PlaybackEngine.getInstance();
     const unsubAudio = engine.subscribe((playing, ms) => {
@@ -149,21 +206,6 @@ export function App() {
       unsubAudio();
     };
   }, []);
-
-  // ミリ秒を YouTube 風の「分:秒 (m:ss)」形式に変換
-  const formatTime = (ms: number) => {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    const formattedSec = seconds.toString().padStart(2, '0');
-
-    if (hours > 0) {
-      const formattedMin = minutes.toString().padStart(2, '0');
-      return `${hours}:${formattedMin}:${formattedSec}`;
-    }
-    return `${minutes}:${formattedSec}`;
-  };
 
   // --- 2. 再生中のシークバー追従（50ms周期） ---
   useEffect(() => {
@@ -302,7 +344,7 @@ export function App() {
     await persistAll(updatedSongs);
   };
 
-  // --- 8. プリセット操作 (選択 / 追加 / リネーム / 削除) ---
+  // --- 8. プリセット操作 ---
   const handleSelectPreset = async (targetId: string) => {
     if (activePresetId === targetId) return;
 
@@ -389,7 +431,7 @@ export function App() {
     await persistAll(updatedSongs, updatedPresets, nextId);
   };
 
-  // --- 9. スロット操作 (追加 / 変更 / 削除) ---
+  // --- 9. スロット操作 (初期値は常に NONE_PRESET) ---
   const handleAddSlot = async () => {
     if (!currentSong) return;
     const defaultCh = currentSong.usedChannels[0] ?? 0;
@@ -397,7 +439,7 @@ export function App() {
       id: crypto.randomUUID(),
       isEnabled: true,
       selectedChannel: defaultCh,
-      assignedPreset: INSTRUMENT_PRESETS[0],
+      assignedPreset: NONE_PRESET,
       latencyOffsetMs: 0.0
     };
     const updatedSlots = [...currentSong.slots, newSlot];
@@ -446,7 +488,7 @@ export function App() {
             padding: '5px 8px',
             background: isSidebarOpen ? '#243B54' : '#1C2742',
             border: '1px solid #243B54',
-            borderRadius: 6,
+            borderRadius: 4,
             color: '#A4D3FF',
             cursor: 'pointer'
           }}
@@ -459,13 +501,13 @@ export function App() {
 
         <button
           onClick={() => PlaybackEngine.getInstance().togglePlayPause()}
-          style={{ padding: '6px 14px', background: '#587CEA', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', color: '#ffffff' }}
+          style={{ padding: '6px 14px', background: '#587CEA', border: 'none', borderRadius: 4, fontWeight: 'bold', cursor: 'pointer', color: '#ffffff' }}
         >
           {isPlaying ? 'PAUSE' : 'PLAY'}
         </button>
         <button
           onClick={() => PlaybackEngine.getInstance().stop()}
-          style={{ padding: '6px 11px', background: '#3E4163', border: 'none', borderRadius: 6, color: '#E2EFFF', cursor: 'pointer' }}
+          style={{ padding: '6px 11px', background: '#3E4163', border: 'none', borderRadius: 4, color: '#E2EFFF', cursor: 'pointer' }}
         >
           STOP
         </button>
@@ -479,7 +521,6 @@ export function App() {
           onChange={e => PlaybackEngine.getInstance().seek(Number(e.target.value))}
           style={{ flex: 1, accentColor: '#A4D3FF' }}
         />
-        {/* 秒数表示を formatTime で m:ss 形式に変換 */}
         <span style={{ fontSize: 12, fontFamily: 'monospace', minWidth: 80, textAlign: 'center' }}>
           {formatTime(currentPlaybackMs)} / {formatTime(currentSong?.durationMs ?? 0)}
         </span>
@@ -491,7 +532,7 @@ export function App() {
             setIsMetronome(next);
             PlaybackEngine.getInstance().isMetronomeEnabled = next;
           }}
-          style={{ padding: '4px 8px', background: isMetronome ? '#706cad' : '#1C2742', border: 'none', borderRadius: 6, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
+          style={{ padding: '4px 8px', background: isMetronome ? '#706cad' : '#1C2742', border: 'none', borderRadius: 4, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
         >
           Click {isMetronome ? 'ON' : 'OFF'}
         </button>
@@ -501,7 +542,7 @@ export function App() {
             setIsBgm(next);
             PlaybackEngine.getInstance().isBgmEnabled = next;
           }}
-          style={{ padding: '4px 8px', background: isBgm ? '#8871c4' : '#1C2742', border: 'none', borderRadius: 6, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
+          style={{ padding: '4px 8px', background: isBgm ? '#8871c4' : '#1C2742', border: 'none', borderRadius: 4, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
         >
           BGM {isBgm ? 'ON' : 'OFF'}
         </button>
@@ -517,7 +558,7 @@ export function App() {
               background: '#1C2742',
               color: '#E2EFFF',
               border: '1px solid #243B54',
-              borderRadius: 6,
+              borderRadius: 4,
               padding: '5px 10px',
               fontSize: 12,
               cursor: 'pointer'
@@ -645,7 +686,7 @@ export function App() {
         </div>
 
         {/* タブ切り替え（Visualizer / Track Settings） */}
-        <div style={{ background: '#1C2742', borderRadius: 6, padding: 2, display: 'flex' }}>
+        <div style={{ background: '#1C2742', borderRadius: 4, padding: 2, display: 'flex' }}>
           <button
             onClick={() => setSelectedTab('visualizer')}
             style={{ padding: '4px 10px', background: selectedTab === 'visualizer' ? '#A4D3FF' : 'transparent', color: selectedTab === 'visualizer' ? '#101F33' : '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
@@ -660,7 +701,7 @@ export function App() {
           </button>
         </div>
 
-        {/* タブ枠から分離した独立ボタン (固定サイズ 32x28px でズレを完全防止) */}
+        {/* タブ枠から分離した独立ボタン (固定サイズ 32x28px でズレを防止) */}
         {selectedTab === 'visualizer' ? (
           <button
             onClick={() => setIsControlBarOpen(prev => !prev)}
@@ -672,7 +713,7 @@ export function App() {
               padding: 0,
               background: isControlBarOpen ? '#243B54' : '#1C2742',
               border: '1px solid #243B54',
-              borderRadius: 6,
+              borderRadius: 4,
               color: isControlBarOpen ? '#A4D3FF' : '#8FA4C4',
               cursor: 'pointer',
               fontSize: 10,
@@ -697,7 +738,7 @@ export function App() {
                 padding: 0,
                 background: isStorageMenuOpen ? '#243B54' : '#1C2742',
                 border: '1px solid #243B54',
-                borderRadius: 6,
+                borderRadius: 4,
                 color: isStorageMenuOpen ? '#A4D3FF' : '#8FA4C4',
                 cursor: 'pointer',
                 fontSize: 10,
@@ -765,14 +806,15 @@ export function App() {
 
       {/* 2. メイン 2ペイン構造 */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* 左ペイン: 楽曲リスト & 検出デバイス (トグル可能) */}
+        {/* 左ペイン: 楽曲リスト & 検出デバイス */}
         {isSidebarOpen && (
           <div style={{ width: 280, borderRight: '2px solid #243B54', display: 'flex', flexDirection: 'column', background: '#1D202C' }}>
-            {/* 楽曲リスト */}
-            <div style={{ flex: 1, padding: 12, overflowY: 'auto' }}>
+            
+            {/* 楽曲リスト (残り高さいっぱいに広がり、最小100pxを確保) */}
+            <div style={{ flex: 1, minHeight: 100, padding: 12, overflowY: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4' }}>楽曲リスト ({songs.length})</span>
-                <label style={{ fontSize: 11, background: '#6f6ec6', color: '#E0EDFD', padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
+                <label style={{ fontSize: 11, background: '#A4D3FF', color: '#101F33', padding: '1px 8px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}>
                   + 追加
                   <input type="file" multiple accept=".mid,.midi" onChange={handleMidiUpload} style={{ display: 'none' }} />
                 </label>
@@ -786,10 +828,10 @@ export function App() {
                     alignItems: 'center',
                     padding: '8px',
                     marginBottom: 4,
-                    borderRadius: 6,
+                    borderRadius: 4,
                     cursor: 'pointer',
                     background: song.id === selectedSongId ? 'rgba(78, 167, 230, 0.12)' : '#181822',
-                    border: song.id === selectedSongId ? '1px solid #859FF6' : '1px solid transparent'
+                    border: song.id === selectedSongId ? '1px solid #A4D3FF' : '1px solid transparent'
                   }}
                 >
                   <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -816,12 +858,41 @@ export function App() {
               ))}
             </div>
 
-            {/* 検出デバイス一覧 */}
-            <div style={{ height: 260, borderTop: '2px solid #243B54', padding: 12, overflowY: 'auto', background: '#1D202C' }}>
+            {/* 上下ドラッグリサイズ用スプリッター境界線 */}
+            <div
+              onMouseDown={handleStartResize}
+              title="上下にドラッグしてサイズを調整"
+              style={{
+                height: 8,
+                cursor: 'row-resize',
+                background: isResizingSidebar ? '#587CEA' : '#141D34',
+                borderTop: '1px solid #243B54',
+                borderBottom: '1px solid #243B54',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                userSelect: 'none',
+                transition: 'background 0.15s',
+                zIndex: 10
+              }}
+              onMouseEnter={e => {
+                if (!isResizingSidebar) e.currentTarget.style.background = '#2A3C5A';
+              }}
+              onMouseLeave={e => {
+                if (!isResizingSidebar) e.currentTarget.style.background = '#141D34';
+              }}
+            >
+              {/* つまみアイコン (3本のドット) */}
+              <div style={{ display: 'flex', gap: 3 }}>                
+                <div style={{ width: 24, height: 2, background: isResizingSidebar ? '#E2EFFF' : '#8FA4C4', borderRadius: 1 }} />
+              </div>
+            </div>
+
+            {/* 検出デバイス一覧 (高さを動的 state で制御) */}
+            <div style={{ height: devicePanelHeight, padding: 12, overflowY: 'auto', background: '#1D202C' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4' }}>MIDIデバイス ({endpoints.length})</span>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {/* USB シリアル照合ボタン */}
                   <button
                     onClick={() => MidiDeviceManager.getInstance().probeSerialDeviceManually()}
                     title="USB接続されたマイコンから楽器名を直接取得して自動照合します"
@@ -829,7 +900,6 @@ export function App() {
                   >
                     + USB照合
                   </button>
-                  {/* BLE ペアリングボタン */}
                   <button
                     onClick={() => MidiDeviceManager.getInstance().connectBleDevice()}
                     style={{ fontSize: 11, background: '#4058C2', border: 'none', color: '#E2EFFF', padding: '2px 7px', borderRadius: 4, cursor: 'pointer' }}
@@ -864,7 +934,6 @@ export function App() {
                     </span>
                   </div>
 
-                  {/* 楽器割り当てドロップダウン */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                     <span style={{ fontSize: 10, color: '#8FA4C4' }}>楽器:</span>
                     <select
@@ -877,15 +946,14 @@ export function App() {
                       style={{
                         flex: 1,
                         background: '#243B54',
-                        color: ep.identifiedPreset ? '#A4D3FF' : '#8FA4C4',
+                        color: ep.identifiedPreset && ep.identifiedPreset.id !== 0 ? '#A4D3FF' : '#8FA4C4',
                         border: '1px solid #4e598c',
                         borderRadius: 3,
                         fontSize: 11,
                         padding: '2px 4px'
                       }}
                     >
-                      <option value={0}>未割当 (None)</option>
-                      {INSTRUMENT_PRESETS.filter(p => p.id !== 0).map(p => (
+                      {knownPresets.map(p => (
                         <option key={p.id} value={p.id}>
                           {p.name}
                         </option>
@@ -933,7 +1001,7 @@ export function App() {
         <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
           {selectedTab === 'visualizer' ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-              {/* 補助コントロールバー (上部三角ボタンで開閉連動) */}
+              {/* 補助コントロールバー */}
               {isControlBarOpen && (
                 <div
                   style={{
@@ -995,14 +1063,14 @@ export function App() {
               {currentSong ? (
                 <div>
                   <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <label style={{ fontSize: 12, background: '#175883', padding: '6px 11px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
+                    <label style={{ fontSize: 12, background: '#175883', padding: '6px 11px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}>
                       BGM音声を紐付け (.mp3, .wav, .ogg)
                       <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: 'none' }} />
                     </label>
                     {currentSong.bgmFileName && <span style={{ fontSize: 12, color: '#88D5DA' }}>✓ {currentSong.bgmFileName}</span>}
                     <button
                       onClick={handleAddSlot}
-                      style={{ marginLeft: 'auto', fontSize: 12, background: '#A4D3FF', border: 'none', padding: '6px 11px', borderRadius: 6, color: '#101F33', fontWeight: 'bold', cursor: 'pointer' }}
+                      style={{ marginLeft: 'auto', fontSize: 12, background: '#A4D3FF', border: 'none', padding: '6px 11px', borderRadius: 4, color: '#101F33', fontWeight: 'bold', cursor: 'pointer' }}
                     >
                       + レーン追加
                     </button>
@@ -1032,7 +1100,7 @@ export function App() {
                         <select
                           value={slot.selectedChannel}
                           onChange={e => handleUpdateSlot(slot.id, { selectedChannel: Number(e.target.value) })}
-                          style={{ background: '#2D376A', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 6, padding: '4px 8px' }}
+                          style={{ background: '#2D376A', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 4, padding: '4px 8px' }}
                         >
                           {Array.from({ length: 16 }, (_, i) => {
                             const count = currentSong.channelCaches[i]?.noteCount ?? 0;
@@ -1044,18 +1112,31 @@ export function App() {
                           })}
                         </select>
 
-                        {/* 送信先楽器 */}
+                        {/* 送信先楽器 (動的ターゲット一覧を描画: #1, #2 枝番付き) */}
                         <select
-                          value={slot.assignedPreset.id}
+                          value={
+                            slot.assignedPreset?.endpointId ??
+                            (slot.assignedPreset?.instanceIndex
+                              ? `${slot.assignedPreset.mcuName}#${slot.assignedPreset.instanceIndex}`
+                              : slot.assignedPreset?.mcuName ?? 'None')
+                          }
                           onChange={e => {
-                            const p = INSTRUMENT_PRESETS.find(x => x.id === Number(e.target.value))!;
-                            handleUpdateSlot(slot.id, { assignedPreset: p, latencyOffsetMs: p.defaultOffsetMs });
+                            const val = e.target.value;
+                            const target = availableTargets.find(
+                              t => (t.endpointId ? t.endpointId === val : t.mcuName === val)
+                            ) ?? NONE_PRESET;
+                            handleUpdateSlot(slot.id, { assignedPreset: target, latencyOffsetMs: target.defaultOffsetMs });
                           }}
-                          style={{ background: '#2D376A', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 6, padding: '4px 8px' }}
+                          style={{ background: '#2D376A', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 4, padding: '4px 8px' }}
                         >
-                          {INSTRUMENT_PRESETS.map(p => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
+                          {availableTargets.map(p => {
+                            const optValue = p.endpointId ?? p.mcuName;
+                            return (
+                              <option key={optValue} value={optValue}>
+                                {p.name} {p.id !== 0 ? `(Ch:${p.midiChannel + 1})` : ''}
+                              </option>
+                            );
+                          })}
                         </select>
 
                         {/* 遅延補正スライダー */}

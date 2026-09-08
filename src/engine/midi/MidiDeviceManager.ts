@@ -1,5 +1,5 @@
 import { UnifiedMidiEndpoint } from './types';
-import { INSTRUMENT_PRESETS, InstrumentPreset } from '../../models/InstrumentPreset';
+import { loadRegisteredPresets, registerMcuPreset, InstrumentPreset, NONE_PRESET } from '../../models/InstrumentPreset';
 import { SerialDeviceProber } from '../serial/SerialDeviceProber';
 
 // M5Stack AtomS3 (ESP32-S3) の USB Vendor ID
@@ -50,7 +50,6 @@ export class MidiDeviceManager {
     const nav = navigator as any;
     if (nav.serial && nav.serial.addEventListener) {
       nav.serial.addEventListener('connect', () => {
-        // デバイスが接続されたら自動で順次問い合わせ
         setTimeout(() => {
           this.autoProbeAllGrantedPorts();
         }, 500);
@@ -68,7 +67,6 @@ export class MidiDeviceManager {
 
       this.midiAccess.onstatechange = () => {
         this.refreshEndpoints();
-        // MIDIデバイスが増減した際もシリアル自動照合を走らせる
         this.autoProbeAllGrantedPorts();
       };
     } catch {
@@ -80,12 +78,12 @@ export class MidiDeviceManager {
       }
     }
 
-    // 起動時に既存の許可済みポートを順に自動問い合わせ
     this.autoProbeAllGrantedPorts();
   }
 
   public refreshEndpoints(): void {
     const nextEndpoints: UnifiedMidiEndpoint[] = [];
+    const presets = loadRegisteredPresets();
 
     if (this.midiAccess) {
       const outputs: any[] = Array.from(this.midiAccess.outputs.values());
@@ -93,10 +91,10 @@ export class MidiDeviceManager {
       for (const out of outputs) {
         let identified: InstrumentPreset | undefined;
         if (this.manualAssignments[out.id]) {
-          identified = INSTRUMENT_PRESETS.find(p => p.id === this.manualAssignments[out.id]);
+          identified = presets.find(p => p.id === this.manualAssignments[out.id]);
         }
         if (!identified) {
-          identified = INSTRUMENT_PRESETS.find(p =>
+          identified = presets.find(p =>
             p.id !== 0 && (out.name || '').toLowerCase().includes(p.mcuName.toLowerCase())
           );
         }
@@ -125,8 +123,8 @@ export class MidiDeviceManager {
 
   /**
    * 「+ USB照合」ボタン:
-   * M5Stack AtomS3 のみをフィルタリングしてダイアログを開き、
-   * 許可されたポートおよび既存ポートに対して順に自動問い合わせを行う
+   * M5Stack AtomS3 を優先フィルタリングしてポート選択ダイアログを表示し、
+   * 検出された MCU_NAME を動的登録してバインドする
    */
   public async probeSerialDeviceManually(): Promise<void> {
     const nav = navigator as any;
@@ -136,29 +134,27 @@ export class MidiDeviceManager {
     }
 
     try {
-      // 1. M5Stack AtomS3 (ESP32-S3) を優先フィルタリングしてポート選択ダイアログを表示
       let port: any;
       try {
         port = await nav.serial.requestPort({
           filters: [{ usbVendorId: ESP32_S3_VENDOR_ID }]
         });
       } catch {
-        // フィルタで一致しない互換デバイスの場合は全シリアルポートをフォールバック表示
         port = await nav.serial.requestPort();
       }
 
-      // 2. 選択されたポートに問い合わせ
       if (port) {
         const info = await SerialDeviceProber.probePort(port);
         if (info) {
           this.bindSerialMcuToEndpoint(info.instId, info.mcuName);
+        } else {
+          alert('マイコンからのハンドシェイク応答がありませんでした。');
         }
       }
 
-      // 3. 他に許可済みのポートがあれば、それらも続けて順次問い合わせ
       await this.autoProbeAllGrantedPorts();
     } catch {
-      /* ユーザーキャンセル時は何もしない */
+      /* キャンセル時はスキップ */
     }
   }
 
@@ -173,20 +169,6 @@ export class MidiDeviceManager {
 
     try {
       const ports: any[] = await nav.serial.getPorts();
-
-      // 未割り当ての MIDI ポートがあるか確認
-      const hasUnassignedEndpoints = this.endpoints.some(
-        ep =>
-          ep.transport === 'web-midi' &&
-          (!ep.identifiedPreset || ep.name.toLowerCase().includes('m5') || ep.name.toLowerCase().includes('atom'))
-      );
-
-      if (!hasUnassignedEndpoints && ports.length === 0) {
-        this.isProbingSerial = false;
-        return;
-      }
-
-      // 候補ポートに対して「順に」問い合わせを実行
       for (const port of ports) {
         const info = await SerialDeviceProber.probePort(port);
         if (info) {
@@ -201,16 +183,11 @@ export class MidiDeviceManager {
   }
 
   /**
-   * 検出された MCU 情報を、未バインドの M5Stack / AtomS3 MIDI ポートに紐付け
+   * 検出された MCU 情報を動的プリセットへ登録し、未バインドの MIDI ポートに紐付け
    */
   private bindSerialMcuToEndpoint(instId: number, mcuName: string): void {
-    const preset =
-      INSTRUMENT_PRESETS.find(p => p.instId === instId) ??
-      INSTRUMENT_PRESETS.find(p => p.mcuName.toLowerCase() === mcuName.toLowerCase());
+    const preset = registerMcuPreset(mcuName, instId);
 
-    if (!preset) return;
-
-    // まだ楽器が確定していない M5 / Atom ポートを探してバインド
     const target = this.endpoints.find(
       ep =>
         ep.transport === 'web-midi' &&
@@ -224,25 +201,61 @@ export class MidiDeviceManager {
       target.identifiedPreset = preset;
       this.manualAssignments[target.id] = preset.id;
       this.saveManualAssignments();
-      this.notify();
     }
+
+    this.refreshEndpoints();
   }
 
   public setEndpointPreset(endpointId: string, presetId: number): void {
     const target = this.endpoints.find(e => e.id === endpointId);
     if (!target) return;
 
+    const presets = loadRegisteredPresets();
     if (presetId === 0) {
       delete target.identifiedPreset;
       delete this.manualAssignments[endpointId];
     } else {
-      const preset = INSTRUMENT_PRESETS.find(p => p.id === presetId);
+      const preset = presets.find(p => p.id === presetId);
       target.identifiedPreset = preset;
       this.manualAssignments[endpointId] = presetId;
     }
 
     this.saveManualAssignments();
     this.notify();
+  }
+
+  /**
+   * 現在接続中のデバイスから、同名MCUに対して #1, #2 の枝番を付与したターゲット選択肢を動的生成
+   */
+  public getAvailableMcuTargets(): InstrumentPreset[] {
+    const targets: InstrumentPreset[] = [NONE_PRESET];
+    
+    // 楽器名ごとに接続エンドポイントをグループ化
+    const mcuGroups: Record<string, UnifiedMidiEndpoint[]> = {};
+    for (const ep of this.endpoints) {
+      if (ep.identifiedPreset && ep.identifiedPreset.id !== 0 && ep.identifiedPreset.mcuName !== 'None') {
+        const key = ep.identifiedPreset.mcuName;
+        if (!mcuGroups[key]) mcuGroups[key] = [];
+        mcuGroups[key].push(ep);
+      }
+    }
+
+    // グループごとに枝番を付与してプリセットを展開
+    for (const [mcuName, group] of Object.entries(mcuGroups)) {
+      const isMultiple = group.length > 1;
+      group.forEach((ep, idx) => {
+        const instanceIndex = idx + 1;
+        const basePreset = ep.identifiedPreset!;
+        targets.push({
+          ...basePreset,
+          name: isMultiple ? `${basePreset.name} (#${instanceIndex})` : basePreset.name,
+          instanceIndex,
+          endpointId: ep.id
+        });
+      });
+    }
+
+    return targets;
   }
 
   public getEndpoints(): UnifiedMidiEndpoint[] {
@@ -292,7 +305,8 @@ export class MidiDeviceManager {
       const service = await server.getPrimaryService('03b80e5a-ede8-4b33-a751-6ce34ec4c700');
       const characteristic = await service.getCharacteristic('7772e5db-3868-4112-a1a9-f2669d106bf3');
 
-      const matchedPreset = INSTRUMENT_PRESETS.find(
+      const presets = loadRegisteredPresets();
+      const matchedPreset = presets.find(
         p => p.id !== 0 && (device.name || '').toLowerCase().includes(p.mcuName.toLowerCase())
       );
 

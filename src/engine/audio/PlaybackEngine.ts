@@ -1,5 +1,6 @@
 import { MidiSongData, BeatEvent } from '../../models/SongModels';
 import { MidiDeviceManager } from '../midi/MidiDeviceManager';
+import { UnifiedMidiEndpoint } from '../midi/types';
 
 interface ScheduledNote {
   pitch: number;
@@ -221,15 +222,29 @@ export class PlaybackEngine {
     const items: ScheduledNote[] = [];
 
     for (const slot of this.activeSong.slots) {
-      if (!slot.isEnabled || slot.assignedPreset.id === 0) continue;
+      if (!slot.isEnabled || !slot.assignedPreset || slot.assignedPreset.id === 0 || slot.assignedPreset.mcuName === 'None') continue;
       const cache = this.activeSong.channelCaches[slot.selectedChannel];
       if (!cache || cache.noteCount === 0) continue;
 
-      const matchedEp = endpoints.find(
+      // 1. 同名 MCU_NAME のエンドポイント候補を抽出
+      const candidates = endpoints.filter(
         ep =>
-          ep.identifiedPreset?.id === slot.assignedPreset.id ||
-          ep.name.toLowerCase().includes(slot.assignedPreset.mcuName.toLowerCase())
+          ep.identifiedPreset &&
+          ep.identifiedPreset.id !== 0 &&
+          ep.identifiedPreset.mcuName.toLowerCase() === slot.assignedPreset.mcuName.toLowerCase()
       );
+
+      // 2. endpointId の完全一致、または枝番 (instanceIndex: 1, 2...) によるポート特定
+      let matchedEp: UnifiedMidiEndpoint | undefined;
+      if (slot.assignedPreset.endpointId) {
+        matchedEp = candidates.find(ep => ep.id === slot.assignedPreset.endpointId);
+      }
+      if (!matchedEp && slot.assignedPreset.instanceIndex && slot.assignedPreset.instanceIndex <= candidates.length) {
+        matchedEp = candidates[slot.assignedPreset.instanceIndex - 1];
+      }
+      if (!matchedEp) {
+        matchedEp = candidates[0]; // フォールバック
+      }
 
       const offset = slot.latencyOffsetMs;
       const sendChannel = slot.assignedPreset.midiChannel;
