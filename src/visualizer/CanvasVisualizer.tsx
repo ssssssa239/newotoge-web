@@ -19,6 +19,30 @@ export const DEFAULT_CHANNEL_COLORS = [
   '#5F27CD', '#C8D6E5', '#FF9F43', '#10AC84'
 ];
 
+// ノーツ色に白をブレンドして「光り輝くネオン色」を生成するヘルパー
+function getHitLuminescentColor(hexColor: string): string {
+  let r = 255, g = 255, b = 255;
+  const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hexColor);
+  if (match) {
+    r = parseInt(match[1], 16);
+    g = parseInt(match[2], 16);
+    b = parseInt(match[3], 16);
+  } else if (hexColor.startsWith('rgb')) {
+    const nums = hexColor.match(/\d+/g);
+    if (nums && nums.length >= 3) {
+      r = Number(nums[0]);
+      g = Number(nums[1]);
+      b = Number(nums[2]);
+    }
+  }
+
+  // 白 (255, 255, 255) を 65% ブレンドして元の色相を残したまま強烈に発光させる
+  const blendR = Math.round(r * 0.35 + 255 * 0.65);
+  const blendG = Math.round(g * 0.35 + 255 * 0.65);
+  const blendB = Math.round(b * 0.35 + 255 * 0.65);
+  return `rgb(${blendR}, ${blendG}, ${blendB})`;
+}
+
 interface VisualizerLane {
   channel: number;
   title: string;
@@ -162,15 +186,9 @@ export const CanvasVisualizer: React.FC<Props> = ({
         }
       }
 
-      // 2. 判定ライン
-      if (!isChromaKeyEnabled) {
-        ctx.fillStyle = 'rgba(126, 202, 220, 0.35)';
-        ctx.fillRect(0, judgeLineY - 2, width, 6);
-      }
-      ctx.fillStyle = isChromaKeyEnabled ? '#101F33' : 'rgba(255, 255, 255, 0.85)';
-      ctx.fillRect(0, judgeLineY, width, 2.5);
+      
 
-      // 3. レーン境界線
+      // 2. レーン境界線
       ctx.strokeStyle = isChromaKeyEnabled ? 'rgba(0, 0, 0, 0.3)' : 'rgba(36, 59, 84, 0.7)';
       ctx.lineWidth = 1.5;
       for (let i = 1; i < lanes.length; i++) {
@@ -181,7 +199,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
         ctx.stroke();
       }
 
-      // 4. ノーツ描画 (重なり防止 ＋ 明瞭な輪郭・立体感の付与)
+      // 3. ノーツ描画 (音ゲー風ネオン発光 ＋ インパクト演出)
       const topMs = currentMs - (height - judgeLineY) / speed - 50;
       const bottomMs = currentMs + judgeLineY / speed + 50;
 
@@ -196,10 +214,11 @@ export const CanvasVisualizer: React.FC<Props> = ({
         const maxP = cache.maxPitch;
         const pitchRange = Math.max(1, maxP - minP);
 
-        // 1音あたりのグリッド幅
         const stepX = (laneWidth - 16) / pitchRange;
-        // 重なりを防ぐため、ピッチ幅よりわずかに小さい幅（最小6px、最大 stepX - 1px）にする
-        const noteWidth = Math.max(6, Math.min(stepX - 1.5, 28));
+        const baseNoteWidth = Math.max(6, Math.min(stepX - 1.5, 28));
+
+        // このレーンの発光色を事前計算
+        const hitLuminescentColor = getHitLuminescentColor(lane.color);
 
         for (const note of visibleNotes) {
           const yBottom = judgeLineY - (note.startTimeMs - currentMs) * speed;
@@ -208,27 +227,47 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
           const p = Math.min(Math.max(note.pitch, minP), maxP);
           const innerX = 8 + (p - minP) * stepX;
-          const x = Math.round(laneX + innerX - noteWidth / 2);
 
           const isHit = currentMs >= note.startTimeMs && currentMs <= note.endTimeMs;
 
-          // ① ノーツ本体の塗り（ヒット時は発光色）
-          ctx.fillStyle = isHit ? '#E2EFFF' : lane.color;
+          // ヒット時はわずかに横幅を広げてインパクトを表現（+2px）
+          const currentWidth = isHit ? baseNoteWidth + 2 : baseNoteWidth;
+          const x = Math.round(laneX + innerX - currentWidth / 2);
+
+          // ★ 音ゲー風ネオングロー（外光オーラ）設定
+          if (isHit && !isChromaKeyEnabled) {
+            ctx.shadowColor = lane.color;
+            ctx.shadowBlur = 15;
+          } else {
+            ctx.shadowBlur = 0;
+          }
+
+          // ① ノーツ本体の塗り
+          ctx.fillStyle = isHit ? hitLuminescentColor : lane.color;
           ctx.beginPath();
-          ctx.roundRect(x, yTop, noteWidth, noteHeight, 2.5);
+          ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.5);
           ctx.fill();
 
-          // ② 境界線（暗いフチ取り）を描画して、和音や連打の重なりを明瞭に分離
+          // ② 境界線・輪郭
+          // ヒット時は純白の細いコアライン、通常時は暗めのフチ取り
           ctx.strokeStyle = isChromaKeyEnabled
-            ? 'rgba(0, 0, 0, 0.5)'
-            : isHit
-            ? '#FFFFFF'
-            : 'rgba(10, 14, 26, 0.75)';
-          ctx.lineWidth = 1.2;
+            ? (isHit ? '#FFFFFF' : 'rgba(0, 0, 0, 0.5)')
+            : (isHit ? '#FFFFFF' : 'rgba(10, 14, 26, 0.75)');
+          ctx.lineWidth = isHit ? 1.5 : 1.2;
           ctx.stroke();
+
+          // シャドウを即座にリセットして他要素への影響を防止
+          ctx.shadowBlur = 0;
         }
       }
 
+      // 4. 判定ライン
+      if (!isChromaKeyEnabled) {
+        ctx.fillStyle = 'rgba(126, 202, 220, 0.35)';
+        ctx.fillRect(0, judgeLineY - 2, width, 6);
+      }
+      ctx.fillStyle = isChromaKeyEnabled ? '#101F33' : 'rgba(255, 255, 255, 0.85)';
+      ctx.fillRect(0, judgeLineY, width, 3.0);
       ctx.restore();
       animId = requestAnimationFrame(render);
     };
@@ -247,7 +286,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
             width: '100%',
             height: 30,
             flexShrink: 0,
-            borderBottom: '2px solid #243B54',
+            borderBottom: '1px solid #36485E',
             background: isChromaKeyEnabled ? '#CBD7E6' : '#36485E'
           }}
         >

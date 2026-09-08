@@ -5,6 +5,44 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>newotoge-web</title>
+<style>
+  /* 通常時は完全透明（非表示） */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent; /* レールを透明にして常駐感をゼロにする */
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+  }
+
+  /* マウスがそのパネルに乗った時だけつまみを表示 */
+  *:hover {
+    scrollbar-color: #43587A transparent;
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    background: #43587A; /* 視認性の高いブルーグレー */
+  }
+
+  *:hover::-webkit-scrollbar-thumb:hover {
+    background: #5D79A6;
+  }
+
+  *:hover::-webkit-scrollbar-thumb:active {
+    background: #A4D3FF;
+  }
+</style>
   </head>
   <body>
     <div id="root"></div>

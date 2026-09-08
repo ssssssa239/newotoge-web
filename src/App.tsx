@@ -242,7 +242,8 @@ export function App() {
       if (p.id === targetActivePresetId) {
         const slotsMap: Record<string, LaneSlot[]> = { ...p.songSlots };
         for (const s of targetSongs) {
-          slotsMap[s.id] = s.slots;
+          // 各スロットオブジェクトを確実に複製して保存
+          slotsMap[s.id] = s.slots.map(slot => ({ ...slot }));
         }
         return { ...p, songSlots: slotsMap };
       }
@@ -444,7 +445,8 @@ export function App() {
       isEnabled: true,
       selectedChannel: defaultCh,
       assignedPreset: NONE_PRESET,
-      latencyOffsetMs: 0.0
+      latencyOffsetMs: 0.0,
+      customColor: DEFAULT_CHANNEL_COLORS[defaultCh % 16]
     };
     const updatedSlots = [...currentSong.slots, newSlot];
     const updatedSong = { ...currentSong, slots: updatedSlots };
@@ -552,7 +554,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0A0E1A', color: '#E2EFFF', fontFamily: 'sans-serif' }}>
       {/* 1. トランスポートバー */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '2px solid #243B54', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '2px solid #DBB28A', gap: 12 }}>
         <button
           onClick={() => setIsSidebarOpen(prev => !prev)}
           title={isSidebarOpen ? 'サイドバーを隠す' : 'サイドバーを表示'}
@@ -649,7 +651,7 @@ export function App() {
                 left: 0,
                 minWidth: 200,
                 background: '#141D34',
-                border: '1px solid #243B54',
+                border: '1px solid #e7cdad',
                 borderRadius: 6,
                 boxShadow: '0 6px 18px rgba(0,0,0,0.55)',
                 padding: '4px 0',
@@ -729,7 +731,7 @@ export function App() {
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <span>✎</span>
-                <span>プリセット名を変更...</span>
+                <span>プリセット名を変更</span>
               </div>
 
               {presets.length > 1 && (
@@ -750,7 +752,7 @@ export function App() {
                   onMouseEnter={e => (e.currentTarget.style.background = '#1C2742')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
-                  <span>🗑</span>
+                  <span></span>
                   <span>現在のプリセットを削除</span>
                 </div>
               )}
@@ -835,7 +837,7 @@ export function App() {
                   right: 0,
                   width: 230,
                   background: '#141D34',
-                  border: '1px solid #243B54',
+                  border: '1px solid #e7cdad',
                   borderRadius: 6,
                   boxShadow: '0 6px 18px rgba(0,0,0,0.55)',
                   padding: '12px',
@@ -879,10 +881,37 @@ export function App() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* 左ペイン */}
         {isSidebarOpen && (
-          <div style={{ width: 280, borderRight: '2px solid #243B54', display: 'flex', flexDirection: 'column', background: '#1D202C' }}>
+          <div
+            style={{
+              width: 280,
+              borderRight: '2px solid #DBB28A',
+              display: 'flex',
+              flexDirection: 'column',
+              background: '#1D202C',
+              position: 'relative' // ← absolute配置の基準にするため追加
+            }}
+          >
+            {/* ★★★ 左側（左ペイン右上隅）の滑らかなアール ★★★ */}
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                zIndex: 50,
+                pointerEvents: 'none'
+              }}
+            >
+              <path d="M 12 0 L 12 12 Q 12 0 0 0 Z" fill="#DBB28A" />
+            </svg>
+
+            {/* 楽曲リスト (残り高さいっぱいに広がり、最小100pxを確保) */}
+
             <div style={{ flex: 1, minHeight: 100, padding: 12, overflowY: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4' }}>楽曲リスト ({songs.length})</span>
+                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#8FA4C4' }}>楽曲リスト ({songs.length})</span>
                 <label style={{ fontSize: 11, background: '#A4D3FF', color: '#101F33', padding: '1px 8px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}>
                   + 追加
                   <input type="file" multiple accept=".mid,.midi" onChange={handleMidiUpload} style={{ display: 'none' }} />
@@ -905,7 +934,7 @@ export function App() {
                 >
                   <div style={{ flex: 1, overflow: 'hidden' }}>
                     <div style={{ fontSize: 13, fontWeight: song.id === selectedSongId ? 'bold' : 'normal', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
-                      {song.fileName}
+                      {song.fileName.replace(/\.midi?$/i, '')}
                     </div>
                     <div style={{ fontSize: 11, color: '#8FA4C4', marginTop: 2 }}>
                       {formatTime(song.durationMs)} {song.bgmFileName && '• BGM付'}
@@ -927,37 +956,52 @@ export function App() {
               ))}
             </div>
 
-            {/* スプリッター境界線 */}
+            {/* 上下ドラッグリサイズ用スプリッター境界線 */}
             <div
               onMouseDown={handleStartResize}
               title="上下にドラッグしてサイズを調整"
               style={{
-                height: 5,
+                height: 8,
                 cursor: 'row-resize',
-                background: isResizingSidebar ? '#587CEA' : '#243B54',
+                background: isResizingSidebar ? '#202B45' : '#141D34',
+                borderTop: '1px solid #243B54',
+                borderBottom: '1px solid #243B54',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 userSelect: 'none',
                 transition: 'background 0.15s',
                 zIndex: 10
               }}
               onMouseEnter={e => {
-                if (!isResizingSidebar) e.currentTarget.style.background = '#4058C2';
+                if (!isResizingSidebar) e.currentTarget.style.background = '#1C2742';
               }}
               onMouseLeave={e => {
-                if (!isResizingSidebar) e.currentTarget.style.background = '#243B54';
+                if (!isResizingSidebar) e.currentTarget.style.background = '#141D34';
               }}
-            />
+            >
+              {/* 控えめな1本バー */}
+              <div
+                style={{
+                  width: 30,
+                  height: 2,
+                  background: isResizingSidebar ? '#A4D3FF' : '#3f4f6c',
+                  borderRadius: 2
+                }}
+              />
+            </div>
 
             {/* MIDIデバイス一覧 */}
             <div style={{ height: devicePanelHeight, padding: 12, overflowY: 'auto', background: '#1D202C' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4' }}>MIDIデバイス ({endpoints.length})</span>
+                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#8FA4C4' }}>楽器ロボ ({endpoints.length})</span>
                 <div style={{ display: 'flex', gap: 5 }}>
                   <button
                     onClick={() => setIsManageModalOpen(true)}
-                    title="楽器プリセットの登録・整理"
+                    title="楽器ロボの登録・整理"
                     style={{ fontSize: 11, background: '#243B54', border: 'none', color: '#A4D3FF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
                   >
-                    ⚙ 管理
+                    管理
                   </button>
                   <button
                     onClick={() => MidiDeviceManager.getInstance().probeSerialDeviceManually()}
@@ -1064,6 +1108,25 @@ export function App() {
 
         {/* 右ペイン */}
         <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          
+          {/* ★★★ ここに追加: 左ペインとトランスポートバーの直角を埋める滑らかなアール ★★★ */}
+          {isSidebarOpen && (
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                zIndex: 50,
+                pointerEvents: 'none'
+              }}
+            >
+              <path d="M 0 0 L 0 12 Q 0 0 12 0 Z" fill="#DBB28A" />
+            </svg>
+          )}
+
           {selectedTab === 'visualizer' ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
               {isControlBarOpen && (
@@ -1084,7 +1147,7 @@ export function App() {
                     <input
                       type="range"
                       min={0.05}
-                      max={1.0}
+                      max={1.5}
                       step={0.01}
                       value={scrollSpeed}
                       onChange={e => setScrollSpeed(Number(e.target.value))}
@@ -1095,6 +1158,9 @@ export function App() {
                   <label style={{ color: isChromaKey ? '#331010' : '#E2EFFF', cursor: 'pointer' }}>
                     <input type="checkbox" checked={showGrid} onChange={e => setShowGrid(e.target.checked)} /> 拍グリッド
                   </label>
+                  <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={showAllCh} onChange={e => setShowAllCh(e.target.checked)} /> 全Ch表示
+                  </label>
                   {/* ↓↓↓ 修正後: isChromaKey を正しくバインド ↓↓↓ */}
                   <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
                     <input
@@ -1103,11 +1169,9 @@ export function App() {
                      onChange={e => setIsChromaKey(e.target.checked)}
                     /> クロマキー
                   </label>
+                  
                   <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={showAllCh} onChange={e => setShowAllCh(e.target.checked)} /> 全Ch表示
-                  </label>
-                  <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={showDebug} onChange={e => setShowDebug(e.target.checked)} /> HUD
+                    <input type="checkbox" checked={showDebug} onChange={e => setShowDebug(e.target.checked)} /> デバッグ
                   </label>
                 </div>
               )}
@@ -1126,7 +1190,7 @@ export function App() {
           ) : (
             <div style={{ padding: 24, overflowY: 'auto', height: '100%' }}>
               <h3 style={{ marginTop: 0 }}>
-                レーン・スロット設定 [{activePreset?.name}] - {currentSong?.fileName ?? '未選択'}
+                トラック設定 [{activePreset?.name}] - {currentSong?.fileName ? currentSong.fileName.replace(/\.midi?$/i, '') : '未選択'}
               </h3>
               {currentSong ? (
                 <div>
@@ -1203,7 +1267,7 @@ export function App() {
                             const statusLabel = p.id !== 0 && !p.isOnline ? ' (未接続)' : '';
                             return (
                               <option key={optValue} value={optValue}>
-                                {statusIcon}{p.name}{statusLabel} {p.id !== 0 ? `(Ch:${p.midiChannel + 1})` : ''}
+                                {statusIcon}{p.name}{statusLabel} {p.id !== 0 ? `` : ''}
                               </option>
                             );
                           })}
@@ -1261,7 +1325,7 @@ export function App() {
 
                         <button
                           onClick={() => handleDeleteSlot(slot.id)}
-                          style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#FF4444', cursor: 'pointer', fontSize: 14 }}
+                          style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#666666', cursor: 'pointer', fontSize: 14 }}
                         >
                           ✕
                         </button>
@@ -1295,7 +1359,7 @@ export function App() {
             style={{
               width: 520,
               background: '#141D34',
-              border: '2px solid #243B54',
+              border: '2px solid #DBB28A',
               borderRadius: 8,
               boxShadow: '0 8px 30px rgba(0,0,0,0.7)',
               padding: 20,
@@ -1306,7 +1370,7 @@ export function App() {
             onClick={e => e.stopPropagation()}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, color: '#A4D3FF' }}>⚙ 楽器プリセット管理</h3>
+              <h3 style={{ margin: 0, color: '#DFEEFE' }}>楽器ロボ管理</h3>
               <button
                 onClick={() => setIsManageModalOpen(false)}
                 style={{ background: 'transparent', border: 'none', color: '#8FA4C4', fontSize: 16, cursor: 'pointer' }}
@@ -1348,12 +1412,10 @@ export function App() {
                     <div>
                       <div style={{ fontWeight: 'bold', fontSize: 13 }}>
                         {isOnline ? '🟢' : '⚪'} {preset.name}
-                        <span style={{ fontSize: 11, color: '#8FA4C4', marginLeft: 6 }}>
-                          (Ch: {preset.midiChannel + 1})
-                        </span>
+                        
                       </div>
                       <div style={{ fontSize: 11, color: '#8FA4C4', marginTop: 2 }}>
-                        {isOnline ? '実機接続中' : '未接続'} • {usedCount > 0 ? `${usedCount}箇所のスロットで使用中` : '未使用'}
+                        {isOnline ? '実機接続中' : '未接続'} / {usedCount > 0 ? `${usedCount}箇所のスロットで使用中` : '未使用'}
                       </div>
                     </div>
 
@@ -1372,7 +1434,7 @@ export function App() {
                         fontWeight: 'bold'
                       }}
                     >
-                      {isOnline ? '接続中' : '削除 🗑'}
+                      {isOnline ? '接続中' : '削除 '}
                     </button>
                   </div>
                 );
@@ -1382,12 +1444,12 @@ export function App() {
             {/* 実機なし手動追加フォーム */}
             <div style={{ borderTop: '1px solid #243B54', paddingTop: 14 }}>
               <div style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4', marginBottom: 6 }}>
-                ＋ 実機なしで新しい楽器名を事前登録
+                楽器名を事前登録
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input
                   type="text"
-                  placeholder="例: ElectricGT_Blue_02"
+                  placeholder="ここに入力"
                   value={newMcuInput}
                   onChange={e => setNewMcuInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleRegisterManualMcu()}
@@ -1408,7 +1470,7 @@ export function App() {
                     border: 'none',
                     borderRadius: 4,
                     color: '#ffffff',
-                    padding: '6px 14px',
+                    padding: '4px 12px',
                     fontSize: 12,
                     fontWeight: 'bold',
                     cursor: 'pointer'
@@ -1419,22 +1481,7 @@ export function App() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-              <button
-                onClick={() => setIsManageModalOpen(false)}
-                style={{
-                  background: '#243B54',
-                  border: 'none',
-                  borderRadius: 4,
-                  color: '#E2EFFF',
-                  padding: '6px 16px',
-                  fontSize: 12,
-                  cursor: 'pointer'
-                }}
-              >
-                閉じる
-              </button>
-            </div>
+            
           </div>
         </div>
       )}
