@@ -11,22 +11,13 @@ interface Props {
   showDebugHUD?: boolean;
 }
 
-// =================================================================
-// 楽器プリセットIDごとの固有カラー定義（仮色）
-// ※ 後からここを書き換えることで、各楽器の色を自由に変更できます
-// =================================================================
-export const PRESET_COLORS: Record<number, string> = {
-  0: 'rgba(115, 115, 122, 0.45)', // None (未割当・グレー)
-  1: '#00C2FF',   // KeyHarmonica (シアン)
-  2: '#FFE600',   // AcousticGuitar (オレンジ)
-  3: '#FF3399',   // PowerChordGT (レッド)
-  4: '#39E639',  // LEADGT_DOUBLE (ピンク)
-  5: '#178317', // LEADGT_PEDALBEND (ライトピンク)
-  6: '#FE8800',  // AltoSax (ゴールド/イエロー)
-  7: '#a95400',   // AltoSax_PedalBend (ダークイエロー)
-  8: '#FF4D4D',   // SopranoSax (ライムグリーン)
-  9: '#B266FF',  // Other (パープル)
-};
+// デフォルトのチャンネルカラー
+export const DEFAULT_CHANNEL_COLORS = [
+  '#FF4D4D', '#FF8533', '#FFC000', '#2ECC71',
+  '#00D2D3', '#3498DB', '#9B59B6', '#E056FD',
+  '#FF6B81', '#1DD1A1', '#F368E0', '#54A0FF',
+  '#5F27CD', '#C8D6E5', '#FF9F43', '#10AC84'
+];
 
 interface VisualizerLane {
   channel: number;
@@ -37,7 +28,7 @@ interface VisualizerLane {
   noteCount: number;
 }
 
-// レーン情報の算出ヘルパー
+// レーン情報の算出 (slot.customColor を最優先で反映)
 function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): VisualizerLane[] {
   if (!song) return [];
   const activeSlots = song.slots.filter(s => s.isEnabled && s.assignedPreset.id !== 0);
@@ -45,7 +36,8 @@ function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): Vi
   if (!showAllChannels) {
     return activeSlots.map(slot => {
       const count = song.channelCaches[slot.selectedChannel]?.noteCount ?? 0;
-      const color = PRESET_COLORS[slot.assignedPreset.id] ?? PRESET_COLORS[9];
+      // customColor があれば優先、なければデフォルト色
+      const color = slot.customColor || DEFAULT_CHANNEL_COLORS[slot.selectedChannel % 16];
       return {
         channel: slot.selectedChannel,
         title: slot.assignedPreset.name,
@@ -60,7 +52,7 @@ function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): Vi
       const count = song.channelCaches[ch]?.noteCount ?? 0;
       const slot = activeSlots.find(s => s.selectedChannel === ch);
       if (slot) {
-        const color = PRESET_COLORS[slot.assignedPreset.id] ?? PRESET_COLORS[9];
+        const color = slot.customColor || DEFAULT_CHANNEL_COLORS[ch % 16];
         return {
           channel: ch,
           title: slot.assignedPreset.name,
@@ -75,7 +67,7 @@ function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): Vi
           title: 'None',
           presetId: 0,
           isAssigned: false,
-          color: PRESET_COLORS[0],
+          color: 'rgba(115, 115, 122, 0.45)',
           noteCount: count
         };
       }
@@ -94,7 +86,6 @@ export const CanvasVisualizer: React.FC<Props> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hudText, setHudText] = useState('');
 
-  // 表示するレーン一覧を算出
   const lanes = getRenderLanes(song, showAllChannels);
 
   useEffect(() => {
@@ -121,7 +112,6 @@ export const CanvasVisualizer: React.FC<Props> = ({
         lastFpsUpdate = now;
       }
 
-      // DPR (Device Pixel Ratio) 補正
       const dpr = window.devicePixelRatio || 1;
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
@@ -191,7 +181,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
         ctx.stroke();
       }
 
-      // 4. ノーツ描画 (SDF角丸矩形の再現)
+      // 4. ノーツ描画 (重なり防止 ＋ 明瞭な輪郭・立体感の付与)
       const topMs = currentMs - (height - judgeLineY) / speed - 50;
       const bottomMs = currentMs + judgeLineY / speed + 50;
 
@@ -206,31 +196,36 @@ export const CanvasVisualizer: React.FC<Props> = ({
         const maxP = cache.maxPitch;
         const pitchRange = Math.max(1, maxP - minP);
 
+        // 1音あたりのグリッド幅
+        const stepX = (laneWidth - 16) / pitchRange;
+        // 重なりを防ぐため、ピッチ幅よりわずかに小さい幅（最小6px、最大 stepX - 1px）にする
+        const noteWidth = Math.max(6, Math.min(stepX - 1.5, 28));
+
         for (const note of visibleNotes) {
           const yBottom = judgeLineY - (note.startTimeMs - currentMs) * speed;
           const yTop = judgeLineY - (note.endTimeMs - currentMs) * speed;
           const noteHeight = Math.max(4, yBottom - yTop);
 
           const p = Math.min(Math.max(note.pitch, minP), maxP);
-          const noteWidth = Math.max(6, (laneWidth / pitchRange) * 1.1);
-          const innerX = ((p - minP) / pitchRange) * (laneWidth - noteWidth - 8) + 4;
-          const x = laneX + innerX;
+          const innerX = 8 + (p - minP) * stepX;
+          const x = Math.round(laneX + innerX - noteWidth / 2);
 
           const isHit = currentMs >= note.startTimeMs && currentMs <= note.endTimeMs;
 
-          // ノーツ本体の塗りと枠線（ヒット時は指定の淡い青白 #E2EFFF で発光）
+          // ① ノーツ本体の塗り（ヒット時は発光色）
           ctx.fillStyle = isHit ? '#E2EFFF' : lane.color;
           ctx.beginPath();
           ctx.roundRect(x, yTop, noteWidth, noteHeight, 2.5);
           ctx.fill();
 
-          /*
-          if (!isChromaKeyEnabled) {
-            ctx.strokeStyle = isHit ? lane.color : 'rgba(255, 255, 255, 0.35)';
-            ctx.lineWidth = isHit ? 2 : 0.8;
-            ctx.stroke();
-          }
-          */
+          // ② 境界線（暗いフチ取り）を描画して、和音や連打の重なりを明瞭に分離
+          ctx.strokeStyle = isChromaKeyEnabled
+            ? 'rgba(0, 0, 0, 0.5)'
+            : isHit
+            ? '#FFFFFF'
+            : 'rgba(10, 14, 26, 0.75)';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
         }
       }
 
@@ -244,7 +239,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
-      {/* 1. 各レーンの上部ヘッダーバー (送信先楽器名のみ表示) */}
+      {/* 1. 各レーンの上部ヘッダーバー */}
       {lanes.length > 0 && (
         <div
           style={{
@@ -270,7 +265,6 @@ export const CanvasVisualizer: React.FC<Props> = ({
                 padding: '0 6px'
               }}
             >
-              {/* 送信先楽器名 */}
               <div
                 style={{
                   fontSize: 11,
@@ -288,7 +282,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
                 {lane.title}
               </div>
 
-              {/* レーン下部の固有カラーアクセントライン */}
+              {/* レーン下部のカスタムカラーライン */}
               <div
                 style={{
                   position: 'absolute',

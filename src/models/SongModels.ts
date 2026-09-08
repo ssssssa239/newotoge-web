@@ -1,11 +1,12 @@
 import { InstrumentPreset } from './InstrumentPreset';
 
 export interface LaneSlot {
-  id: string; // UUID
+  id: string;
   isEnabled: boolean;
-  selectedChannel: number; // 0〜15
+  selectedChannel: number;
   assignedPreset: InstrumentPreset;
-  latencyOffsetMs: number; // -200ms 〜 +200ms
+  latencyOffsetMs: number;
+  customColor?: string; // ← 追加: ノーツのカスタムカラー (HEX)
 }
 
 export interface EnsemblePreset {

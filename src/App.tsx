@@ -7,12 +7,26 @@ import { MidiSongData, EnsemblePreset, LaneSlot } from './models/SongModels';
 import { UnifiedMidiEndpoint } from './engine/midi/types';
 import { loadRegisteredPresets, registerMcuPreset, deleteRegisteredPreset, InstrumentPreset, NONE_PRESET } from './models/InstrumentPreset';
 import { CanvasVisualizer } from './visualizer/CanvasVisualizer';
+import { CircularColorPicker } from './components/CircularColorPicker';
+
+// デフォルトのチャンネル色配列 (カスタム未設定時に適用)
+const DEFAULT_CHANNEL_COLORS = [
+  '#FF4D4D', '#FF8533', '#FFC000', '#2ECC71',
+  '#00D2D3', '#3498DB', '#9B59B6', '#E056FD',
+  '#FF6B81', '#1DD1A1', '#F368E0', '#54A0FF',
+  '#5F27CD', '#C8D6E5', '#FF9F43', '#10AC84'
+];
 
 export function App() {
   const [songs, setSongs] = useState<MidiSongData[]>([]);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [endpoints, setEndpoints] = useState<UnifiedMidiEndpoint[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
+  // イベントリスナーから常に最新の選択状態を参照するための ref
+  const currentSongRef = useRef<{ id: string | null; songs: MidiSongData[] }>({ id: null, songs: [] });
+  useEffect(() => {
+    currentSongRef.current = { id: selectedSongId, songs };
+  }, [selectedSongId, songs]);
 
   const [knownPresets, setKnownPresets] = useState<InstrumentPreset[]>(() => loadRegisteredPresets());
   const [availableTargets, setAvailableTargets] = useState<InstrumentPreset[]>(() =>
@@ -53,6 +67,8 @@ export function App() {
   const storageMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [testPitch, setTestPitch] = useState(60);
+  // 開いているカラーピッカーのスロットID
+  const [activeColorPickerSlotId, setActiveColorPickerSlotId] = useState<string | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -123,7 +139,7 @@ export function App() {
     return `${minutes}:${formattedSec}`;
   };
 
-  // --- 1. 起動時ロード & デバイス購読 ---
+  // --- 1. 起動時ロード & デバイス購読 (初回マウント時のみ実行) ---
   useEffect(() => {
     const midiMgr = MidiDeviceManager.getInstance();
     midiMgr.initWebMidi();
@@ -132,9 +148,11 @@ export function App() {
       setEndpoints(newEndpoints);
       setKnownPresets(loadRegisteredPresets());
       setAvailableTargets(midiMgr.getAvailableMcuTargets());
-      // マイコン接続時にアクティブ曲の設定を即座に再評価
-      if (selectedSongId) {
-        const active = songs.find(s => s.id === selectedSongId);
+
+      // マイコン接続時に、現在選択されている楽曲のスロット設定を最新状態で再評価
+      const { id, songs: currentSongList } = currentSongRef.current;
+      if (id) {
+        const active = currentSongList.find(s => s.id === id);
         if (active) PlaybackEngine.getInstance().updateSlotConfiguration(active);
       }
     });
@@ -199,7 +217,7 @@ export function App() {
       unsubMidi();
       unsubAudio();
     };
-  }, [selectedSongId]);
+  }, []); // ← ここを [selectedSongId] から空配列 [] に変更
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -1077,8 +1095,13 @@ export function App() {
                   <label style={{ color: isChromaKey ? '#331010' : '#E2EFFF', cursor: 'pointer' }}>
                     <input type="checkbox" checked={showGrid} onChange={e => setShowGrid(e.target.checked)} /> 拍グリッド
                   </label>
+                  {/* ↓↓↓ 修正後: isChromaKey を正しくバインド ↓↓↓ */}
                   <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={showGrid} onChange={e => setShowGrid(e.target.checked)} /> クロマキー
+                    <input
+                      type="checkbox"
+                      checked={isChromaKey}
+                     onChange={e => setIsChromaKey(e.target.checked)}
+                    /> クロマキー
                   </label>
                   <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
                     <input type="checkbox" checked={showAllCh} onChange={e => setShowAllCh(e.target.checked)} /> 全Ch表示
@@ -1157,7 +1180,7 @@ export function App() {
                           })}
                         </select>
 
-                        {/* 送信先楽器 (オンライン: 🟢 / 未接続: ⚪) */}
+                        {/* 送信先楽器 */}
                         <select
                           value={
                             slot.assignedPreset?.endpointId ??
@@ -1185,6 +1208,42 @@ export function App() {
                             );
                           })}
                         </select>
+
+                        {/* ★★★ ここに追加: ノーツ色 四角いボックス ＋ 円形カラーパレット ★★★ */}
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                          {(() => {
+                            const currentColor = slot.customColor || DEFAULT_CHANNEL_COLORS[slot.selectedChannel % 16];
+                            return (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setActiveColorPickerSlotId(activeColorPickerSlotId === slot.id ? null : slot.id)
+                                  }
+                                  title="ノーツの色を変更"
+                                  style={{
+                                    width: 24,
+                                    height: 24,
+                                    borderRadius: 4,
+                                    background: currentColor,
+                                    border: '2px solid #575B77',
+                                    boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                    outline: 'none'
+                                  }}
+                                />
+                                {activeColorPickerSlotId === slot.id && (
+                                  <CircularColorPicker
+                                    color={currentColor}
+                                    onChange={newColor => handleUpdateSlot(slot.id, { customColor: newColor })}
+                                    onClose={() => setActiveColorPickerSlotId(null)}
+                                  />
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
 
                         {/* 遅延補正スライダー */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
