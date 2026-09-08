@@ -5,7 +5,7 @@ import { MidiParser } from './engine/parser/MidiParser';
 import { StorageManager, SongMetadata } from './storage/StorageManager';
 import { MidiSongData, EnsemblePreset, LaneSlot } from './models/SongModels';
 import { UnifiedMidiEndpoint } from './engine/midi/types';
-import { loadRegisteredPresets, InstrumentPreset, NONE_PRESET } from './models/InstrumentPreset';
+import { loadRegisteredPresets, registerMcuPreset, deleteRegisteredPreset, InstrumentPreset, NONE_PRESET } from './models/InstrumentPreset';
 import { CanvasVisualizer } from './visualizer/CanvasVisualizer';
 
 export function App() {
@@ -14,46 +14,19 @@ export function App() {
   const [endpoints, setEndpoints] = useState<UnifiedMidiEndpoint[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
 
-  // 永続化されたMCU一覧（手動バインド用）および接続中デバイスから動的生成されたターゲット一覧（#1, #2 枝番付き）
   const [knownPresets, setKnownPresets] = useState<InstrumentPreset[]>(() => loadRegisteredPresets());
   const [availableTargets, setAvailableTargets] = useState<InstrumentPreset[]>(() =>
     MidiDeviceManager.getInstance().getAvailableMcuTargets()
   );
 
-  // サイドバー表示・非表示フラグ
+  // サイドバー表示 & パネルリサイズ
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-
-  // MIDIデバイスパネルの高さ管理 (初期値 260px)
   const [devicePanelHeight, setDevicePanelHeight] = useState(260);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
 
-  // 境界線のドラッグ開始処理
-  const handleStartResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsResizingSidebar(true);
-
-    const startY = e.clientY;
-    const initialHeight = devicePanelHeight;
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      // 下にドラッグするとYが増え、デバイス一覧の高さは小さくなる
-      const deltaY = moveEvent.clientY - startY;
-      const nextHeight = initialHeight - deltaY;
-
-      // 最小 100px、最大 550px の範囲にクランプ
-      const clamped = Math.min(Math.max(100, nextHeight), 550);
-      setDevicePanelHeight(clamped);
-    };
-
-    const onMouseUp = () => {
-      setIsResizingSidebar(false);
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
+  // 楽器プリセット管理モーダル
+  const [isManageModalOpen, setIsManageModalOpen] = useState(false);
+  const [newMcuInput, setNewMcuInput] = useState('');
 
   // 編成プリセット
   const [presets, setPresets] = useState<EnsemblePreset[]>([{ id: 'default', name: 'プリセット 1', songSlots: {} }]);
@@ -74,15 +47,13 @@ export function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [scrollSpeed, setScrollSpeed] = useState(0.20);
 
-  // ストレージ情報ポップアップ用のステート
+  // ストレージ情報
   const [isStorageMenuOpen, setIsStorageMenuOpen] = useState(false);
   const [storageInfo, setStorageInfo] = useState<{ usage: number; quota: number } | null>(null);
   const storageMenuRef = useRef<HTMLDivElement | null>(null);
 
-  // 単音テスト設定
   const [testPitch, setTestPitch] = useState(60);
 
-  // プリセットメニュー & ストレージメニューの外側クリック検知
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -99,7 +70,28 @@ export function App() {
     };
   }, []);
 
-  // StorageManager API から使用量と上限を取得する
+  const handleStartResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingSidebar(true);
+    const startY = e.clientY;
+    const initialHeight = devicePanelHeight;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const deltaY = moveEvent.clientY - startY;
+      const clamped = Math.min(Math.max(100, initialHeight - deltaY), 550);
+      setDevicePanelHeight(clamped);
+    };
+
+    const onMouseUp = () => {
+      setIsResizingSidebar(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
   const handleOpenStorageInfo = async () => {
     if (navigator.storage && navigator.storage.estimate) {
       const estimate = await navigator.storage.estimate();
@@ -111,14 +103,12 @@ export function App() {
     setIsStorageMenuOpen(prev => !prev);
   };
 
-  // バイト数を用途に応じた単位 (KB / MB / GB) に変換
   const formatBytes = (bytes: number) => {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
-  // ミリ秒を YouTube 風の「分:秒 (m:ss)」形式に変換
   const formatTime = (ms: number) => {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -133,14 +123,20 @@ export function App() {
     return `${minutes}:${formattedSec}`;
   };
 
-  // --- 1. 起動時：IndexedDB から楽曲・BGM・プリセット・スロットを復元 ---
+  // --- 1. 起動時ロード & デバイス購読 ---
   useEffect(() => {
     const midiMgr = MidiDeviceManager.getInstance();
     midiMgr.initWebMidi();
+
     const unsubMidi = midiMgr.subscribe(newEndpoints => {
       setEndpoints(newEndpoints);
       setKnownPresets(loadRegisteredPresets());
       setAvailableTargets(midiMgr.getAvailableMcuTargets());
+      // マイコン接続時にアクティブ曲の設定を即座に再評価
+      if (selectedSongId) {
+        const active = songs.find(s => s.id === selectedSongId);
+        if (active) PlaybackEngine.getInstance().updateSlotConfiguration(active);
+      }
     });
 
     const engine = PlaybackEngine.getInstance();
@@ -152,7 +148,6 @@ export function App() {
     const initLoad = async () => {
       const storage = StorageManager.getInstance();
 
-      // (1) 編成プリセットをロード
       let loadedPresets: EnsemblePreset[] = [{ id: 'default', name: 'プリセット 1', songSlots: {} }];
       let loadedActiveId = 'default';
 
@@ -164,7 +159,6 @@ export function App() {
         setActivePresetId(loadedActiveId);
       }
 
-      // (2) 楽曲リストとバイナリをロード
       const metadataList = await storage.loadSongMetadataList();
       const loadedSongs: MidiSongData[] = [];
 
@@ -205,9 +199,8 @@ export function App() {
       unsubMidi();
       unsubAudio();
     };
-  }, []);
+  }, [selectedSongId]);
 
-  // --- 2. 再生中のシークバー追従（50ms周期） ---
   useEffect(() => {
     if (!isPlaying) return;
     const timer = window.setInterval(() => {
@@ -220,7 +213,6 @@ export function App() {
   const currentEndpoint = endpoints.find(e => e.id === selectedEndpointId) ?? null;
   const activePreset = presets.find(p => p.id === activePresetId);
 
-  // --- 3. 永続化ヘルパー ---
   const persistAll = async (
     targetSongs: MidiSongData[] = songs,
     targetPresets: EnsemblePreset[] = presets,
@@ -257,7 +249,6 @@ export function App() {
     await storage.saveSongMetadataList(metaList);
   };
 
-  // --- 4. 楽曲追加 ---
   const handleMidiUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -285,7 +276,6 @@ export function App() {
     await persistAll(updatedSongs);
   };
 
-  // --- 5. 楽曲削除 ---
   const handleDeleteSong = async (songToDelete: MidiSongData) => {
     const storage = StorageManager.getInstance();
     await storage.deleteSong(songToDelete.id, songToDelete.midiBlobKey, songToDelete.bgmBlobKey);
@@ -312,7 +302,6 @@ export function App() {
     await persistAll(updatedSongs, updatedPresets);
   };
 
-  // --- 6. 楽曲選択切り替え ---
   const handleSelectSong = async (song: MidiSongData) => {
     if (selectedSongId === song.id) return;
     setSelectedSongId(song.id);
@@ -327,7 +316,6 @@ export function App() {
     }
   };
 
-  // --- 7. BGM 紐付け ---
   const handleBgmUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentSong) return;
@@ -344,7 +332,6 @@ export function App() {
     await persistAll(updatedSongs);
   };
 
-  // --- 8. プリセット操作 ---
   const handleSelectPreset = async (targetId: string) => {
     if (activePresetId === targetId) return;
 
@@ -431,7 +418,6 @@ export function App() {
     await persistAll(updatedSongs, updatedPresets, nextId);
   };
 
-  // --- 9. スロット操作 (初期値は常に NONE_PRESET) ---
   const handleAddSlot = async () => {
     if (!currentSong) return;
     const defaultCh = currentSong.usedChannels[0] ?? 0;
@@ -473,11 +459,82 @@ export function App() {
     await persistAll(updatedSongs);
   };
 
+  // --- 楽器手動事前登録 ---
+  const handleRegisterManualMcu = () => {
+    const trimmed = newMcuInput.trim();
+    if (!trimmed) return;
+    registerMcuPreset(trimmed);
+    setNewMcuInput('');
+    setKnownPresets(loadRegisteredPresets());
+    setAvailableTargets(MidiDeviceManager.getInstance().getAvailableMcuTargets());
+  };
+
+  // --- セーフティ付き 楽器プリセット削除 ---
+  const handleDeletePresetSafely = async (preset: InstrumentPreset) => {
+    const isOnline = endpoints.some(
+      ep => ep.identifiedPreset && ep.identifiedPreset.mcuName.toLowerCase() === preset.mcuName.toLowerCase()
+    );
+    if (isOnline) {
+      alert(`「${preset.name}」は現在マイコンが物理接続中のため削除できません。USB/Bluetoothを切断してから削除してください。`);
+      return;
+    }
+
+    const usedSongs = songs.filter(s =>
+      s.slots.some(slot => slot.assignedPreset?.mcuName.toLowerCase() === preset.mcuName.toLowerCase())
+    );
+
+    let confirmMsg = `楽器プリセット「${preset.name}」を削除しますか？`;
+    if (usedSongs.length > 0) {
+      confirmMsg =
+        `「${preset.name}」は以下の楽曲のレーンで使用されています:\n` +
+        usedSongs.map(s => `・${s.fileName}`).join('\n') +
+        `\n\n削除すると、これらのレーンの送信先楽器は「None」に変更されます。本当に削除しますか？`;
+    }
+
+    if (!window.confirm(confirmMsg)) return;
+
+    deleteRegisteredPreset(preset.mcuName);
+
+    const updatedSongs = songs.map(song => {
+      const nextSlots = song.slots.map(slot => {
+        if (slot.assignedPreset?.mcuName.toLowerCase() === preset.mcuName.toLowerCase()) {
+          return { ...slot, assignedPreset: NONE_PRESET, latencyOffsetMs: 0.0 };
+        }
+        return slot;
+      });
+      return { ...song, slots: nextSlots };
+    });
+
+    const updatedPresets = presets.map(p => {
+      const nextSongSlots: Record<string, LaneSlot[]> = {};
+      for (const [songId, slots] of Object.entries(p.songSlots)) {
+        nextSongSlots[songId] = slots.map(slot => {
+          if (slot.assignedPreset?.mcuName.toLowerCase() === preset.mcuName.toLowerCase()) {
+            return { ...slot, assignedPreset: NONE_PRESET, latencyOffsetMs: 0.0 };
+          }
+          return slot;
+        });
+      }
+      return { ...p, songSlots: nextSongSlots };
+    });
+
+    setSongs(updatedSongs);
+    setPresets(updatedPresets);
+    setKnownPresets(loadRegisteredPresets());
+    setAvailableTargets(MidiDeviceManager.getInstance().getAvailableMcuTargets());
+
+    if (currentSong) {
+      const active = updatedSongs.find(s => s.id === currentSong.id);
+      if (active) PlaybackEngine.getInstance().updateSlotConfiguration(active);
+    }
+
+    await persistAll(updatedSongs, updatedPresets);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0A0E1A', color: '#E2EFFF', fontFamily: 'sans-serif' }}>
       {/* 1. トランスポートバー */}
       <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '2px solid #243B54', gap: 12 }}>
-        {/* macOS風 サイドバー開閉トグルボタン */}
         <button
           onClick={() => setIsSidebarOpen(prev => !prev)}
           title={isSidebarOpen ? 'サイドバーを隠す' : 'サイドバーを表示'}
@@ -512,7 +569,6 @@ export function App() {
           STOP
         </button>
 
-        {/* シークバー */}
         <input
           type="range"
           min={0}
@@ -525,7 +581,6 @@ export function App() {
           {formatTime(currentPlaybackMs)} / {formatTime(currentSong?.durationMs ?? 0)}
         </span>
 
-        {/* トグルボタン群 */}
         <button
           onClick={() => {
             const next = !isMetronome;
@@ -547,7 +602,7 @@ export function App() {
           BGM {isBgm ? 'ON' : 'OFF'}
         </button>
 
-        {/* 編成プリセット管理 ドロップダウンメニュー */}
+        {/* 編成プリセット管理 */}
         <div ref={presetMenuRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setIsPresetMenuOpen(prev => !prev)}
@@ -685,7 +740,7 @@ export function App() {
           )}
         </div>
 
-        {/* タブ切り替え（Visualizer / Track Settings） */}
+        {/* タブ切り替え */}
         <div style={{ background: '#1C2742', borderRadius: 4, padding: 2, display: 'flex' }}>
           <button
             onClick={() => setSelectedTab('visualizer')}
@@ -701,7 +756,6 @@ export function App() {
           </button>
         </div>
 
-        {/* タブ枠から分離した独立ボタン (固定サイズ 32x28px でズレを防止) */}
         {selectedTab === 'visualizer' ? (
           <button
             onClick={() => setIsControlBarOpen(prev => !prev)}
@@ -755,7 +809,6 @@ export function App() {
               </svg>
             </button>
 
-            {/* ストレージ情報ポップオーバー */}
             {isStorageMenuOpen && storageInfo && (
               <div
                 style={{
@@ -804,13 +857,11 @@ export function App() {
         )}
       </div>
 
-      {/* 2. メイン 2ペイン構造 */}
+      {/* 2. メイン 2ペイン */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* 左ペイン: 楽曲リスト & 検出デバイス */}
+        {/* 左ペイン */}
         {isSidebarOpen && (
           <div style={{ width: 280, borderRight: '2px solid #243B54', display: 'flex', flexDirection: 'column', background: '#1D202C' }}>
-            
-            {/* 楽曲リスト (残り高さいっぱいに広がり、最小100pxを確保) */}
             <div style={{ flex: 1, minHeight: 100, padding: 12, overflowY: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4' }}>楽曲リスト ({songs.length})</span>
@@ -858,53 +909,50 @@ export function App() {
               ))}
             </div>
 
-            {/* 上下ドラッグリサイズ用スプリッター境界線 */}
+            {/* スプリッター境界線 */}
             <div
               onMouseDown={handleStartResize}
               title="上下にドラッグしてサイズを調整"
               style={{
-                height: 8,
+                height: 5,
                 cursor: 'row-resize',
-                background: isResizingSidebar ? '#587CEA' : '#141D34',
-                borderTop: '1px solid #243B54',
-                borderBottom: '1px solid #243B54',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+                background: isResizingSidebar ? '#587CEA' : '#243B54',
                 userSelect: 'none',
                 transition: 'background 0.15s',
                 zIndex: 10
               }}
               onMouseEnter={e => {
-                if (!isResizingSidebar) e.currentTarget.style.background = '#2A3C5A';
+                if (!isResizingSidebar) e.currentTarget.style.background = '#4058C2';
               }}
               onMouseLeave={e => {
-                if (!isResizingSidebar) e.currentTarget.style.background = '#141D34';
+                if (!isResizingSidebar) e.currentTarget.style.background = '#243B54';
               }}
-            >
-              {/* つまみアイコン (3本のドット) */}
-              <div style={{ display: 'flex', gap: 3 }}>                
-                <div style={{ width: 24, height: 2, background: isResizingSidebar ? '#E2EFFF' : '#8FA4C4', borderRadius: 1 }} />
-              </div>
-            </div>
+            />
 
-            {/* 検出デバイス一覧 (高さを動的 state で制御) */}
+            {/* MIDIデバイス一覧 */}
             <div style={{ height: devicePanelHeight, padding: 12, overflowY: 'auto', background: '#1D202C' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4' }}>MIDIデバイス ({endpoints.length})</span>
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  <button
+                    onClick={() => setIsManageModalOpen(true)}
+                    title="楽器プリセットの登録・整理"
+                    style={{ fontSize: 11, background: '#243B54', border: 'none', color: '#A4D3FF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
+                  >
+                    ⚙ 管理
+                  </button>
                   <button
                     onClick={() => MidiDeviceManager.getInstance().probeSerialDeviceManually()}
                     title="USB接続されたマイコンから楽器名を直接取得して自動照合します"
-                    style={{ fontSize: 11, background: '#175883', border: 'none', color: '#E2EFFF', padding: '2px 7px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ fontSize: 11, background: '#175883', border: 'none', color: '#E2EFFF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
                   >
-                    + USB照合
+                    + USB
                   </button>
                   <button
                     onClick={() => MidiDeviceManager.getInstance().connectBleDevice()}
-                    style={{ fontSize: 11, background: '#4058C2', border: 'none', color: '#E2EFFF', padding: '2px 7px', borderRadius: 4, cursor: 'pointer' }}
+                    style={{ fontSize: 11, background: '#4058C2', border: 'none', color: '#E2EFFF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer' }}
                   >
-                    + Bluetooth
+                    + BLE
                   </button>
                 </div>
               </div>
@@ -963,7 +1011,6 @@ export function App() {
                 </div>
               ))}
 
-              {/* 単音テストUI */}
               {currentEndpoint && (
                 <div style={{ marginTop: 10, padding: 8, background: '#1A1A24', borderRadius: 4 }}>
                   <div style={{ fontSize: 11, color: '#8FA4C4', marginBottom: 6 }}>
@@ -997,11 +1044,10 @@ export function App() {
           </div>
         )}
 
-        {/* 右ペイン: ビジュアライザー or トラック設定 */}
+        {/* 右ペイン */}
         <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
           {selectedTab === 'visualizer' ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-              {/* 補助コントロールバー */}
               {isControlBarOpen && (
                 <div
                   style={{
@@ -1032,7 +1078,7 @@ export function App() {
                     <input type="checkbox" checked={showGrid} onChange={e => setShowGrid(e.target.checked)} /> 拍グリッド
                   </label>
                   <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={isChromaKey} onChange={e => setIsChromaKey(e.target.checked)} /> クロマキー
+                    <input type="checkbox" checked={showGrid} onChange={e => setShowGrid(e.target.checked)} /> クロマキー
                   </label>
                   <label style={{ color: isChromaKey ? '#101F33' : '#E2EFFF', cursor: 'pointer' }}>
                     <input type="checkbox" checked={showAllCh} onChange={e => setShowAllCh(e.target.checked)} /> 全Ch表示
@@ -1043,7 +1089,6 @@ export function App() {
                 </div>
               )}
 
-              {/* ビジュアライザー描画領域 */}
               <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
                 <CanvasVisualizer
                   song={currentSong}
@@ -1112,7 +1157,7 @@ export function App() {
                           })}
                         </select>
 
-                        {/* 送信先楽器 (動的ターゲット一覧を描画: #1, #2 枝番付き) */}
+                        {/* 送信先楽器 (オンライン: 🟢 / 未接続: ⚪) */}
                         <select
                           value={
                             slot.assignedPreset?.endpointId ??
@@ -1131,9 +1176,11 @@ export function App() {
                         >
                           {availableTargets.map(p => {
                             const optValue = p.endpointId ?? p.mcuName;
+                            const statusIcon = p.id === 0 ? '' : (p.isOnline ? '🟢 ' : '⚪ ');
+                            const statusLabel = p.id !== 0 && !p.isOnline ? ' (未接続)' : '';
                             return (
                               <option key={optValue} value={optValue}>
-                                {p.name} {p.id !== 0 ? `(Ch:${p.midiChannel + 1})` : ''}
+                                {statusIcon}{p.name}{statusLabel} {p.id !== 0 ? `(Ch:${p.midiChannel + 1})` : ''}
                               </option>
                             );
                           })}
@@ -1170,6 +1217,168 @@ export function App() {
           )}
         </div>
       </div>
+
+      {/* 3. 楽器プリセット管理モーダル (セーフティ機能付き) */}
+      {isManageModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2000
+          }}
+          onClick={() => setIsManageModalOpen(false)}
+        >
+          <div
+            style={{
+              width: 520,
+              background: '#141D34',
+              border: '2px solid #243B54',
+              borderRadius: 8,
+              boxShadow: '0 8px 30px rgba(0,0,0,0.7)',
+              padding: 20,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, color: '#A4D3FF' }}>⚙ 楽器プリセット管理</h3>
+              <button
+                onClick={() => setIsManageModalOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: '#8FA4C4', fontSize: 16, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 登録済み一覧 */}
+            <div style={{ maxHeight: 250, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {knownPresets.filter(p => p.id !== 0 && p.mcuName !== 'None').length === 0 && (
+                <div style={{ color: '#8FA4C4', fontSize: 12, padding: '12px 0', textAlign: 'center' }}>
+                  登録されている楽器はありません。
+                </div>
+              )}
+
+              {knownPresets.filter(p => p.id !== 0 && p.mcuName !== 'None').map(preset => {
+                const isOnline = endpoints.some(
+                  ep => ep.identifiedPreset && ep.identifiedPreset.mcuName.toLowerCase() === preset.mcuName.toLowerCase()
+                );
+                const usedCount = songs.reduce(
+                  (acc, s) => acc + s.slots.filter(sl => sl.assignedPreset?.mcuName.toLowerCase() === preset.mcuName.toLowerCase()).length,
+                  0
+                );
+
+                return (
+                  <div
+                    key={preset.mcuName}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      background: '#1C2742',
+                      border: '1px solid #243B54',
+                      borderRadius: 4
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 'bold', fontSize: 13 }}>
+                        {isOnline ? '🟢' : '⚪'} {preset.name}
+                        <span style={{ fontSize: 11, color: '#8FA4C4', marginLeft: 6 }}>
+                          (Ch: {preset.midiChannel + 1})
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: '#8FA4C4', marginTop: 2 }}>
+                        {isOnline ? '実機接続中' : '未接続'} • {usedCount > 0 ? `${usedCount}箇所のスロットで使用中` : '未使用'}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleDeletePresetSafely(preset)}
+                      disabled={isOnline}
+                      title={isOnline ? '物理接続中のため削除できません' : 'プリセットを削除'}
+                      style={{
+                        padding: '4px 10px',
+                        background: isOnline ? '#2C3446' : '#FF4444',
+                        color: isOnline ? '#6A768F' : '#ffffff',
+                        border: 'none',
+                        borderRadius: 4,
+                        fontSize: 11,
+                        cursor: isOnline ? 'not-allowed' : 'pointer',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      {isOnline ? '接続中' : '削除 🗑'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 実機なし手動追加フォーム */}
+            <div style={{ borderTop: '1px solid #243B54', paddingTop: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4', marginBottom: 6 }}>
+                ＋ 実機なしで新しい楽器名を事前登録
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  placeholder="例: ElectricGT_Blue_02"
+                  value={newMcuInput}
+                  onChange={e => setNewMcuInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleRegisterManualMcu()}
+                  style={{
+                    flex: 1,
+                    background: '#1C2742',
+                    border: '1px solid #243B54',
+                    borderRadius: 4,
+                    color: '#E2EFFF',
+                    padding: '6px 10px',
+                    fontSize: 12
+                  }}
+                />
+                <button
+                  onClick={handleRegisterManualMcu}
+                  style={{
+                    background: '#587CEA',
+                    border: 'none',
+                    borderRadius: 4,
+                    color: '#ffffff',
+                    padding: '6px 14px',
+                    fontSize: 12,
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
+                  }}
+                >
+                  + 追加
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+              <button
+                onClick={() => setIsManageModalOpen(false)}
+                style={{
+                  background: '#243B54',
+                  border: 'none',
+                  borderRadius: 4,
+                  color: '#E2EFFF',
+                  padding: '6px 16px',
+                  fontSize: 12,
+                  cursor: 'pointer'
+                }}
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

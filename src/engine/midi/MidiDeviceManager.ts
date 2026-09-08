@@ -225,32 +225,61 @@ export class MidiDeviceManager {
   }
 
   /**
-   * 現在接続中のデバイスから、同名MCUに対して #1, #2 の枝番を付与したターゲット選択肢を動的生成
+   * 登録済みMCU一覧をベースに、接続中デバイス情報（オンライン状態 / #1, #2 枝番）を合成して選択肢を動的生成
    */
   public getAvailableMcuTargets(): InstrumentPreset[] {
     const targets: InstrumentPreset[] = [NONE_PRESET];
-    
-    // 楽器名ごとに接続エンドポイントをグループ化
-    const mcuGroups: Record<string, UnifiedMidiEndpoint[]> = {};
+    const registered = loadRegisteredPresets().filter(p => p.id !== 0 && p.mcuName !== 'None');
+
+    // 接続中のエンドポイントを mcuName ごとにグループ化
+    const connectedGroups: Record<string, UnifiedMidiEndpoint[]> = {};
     for (const ep of this.endpoints) {
       if (ep.identifiedPreset && ep.identifiedPreset.id !== 0 && ep.identifiedPreset.mcuName !== 'None') {
-        const key = ep.identifiedPreset.mcuName;
-        if (!mcuGroups[key]) mcuGroups[key] = [];
-        mcuGroups[key].push(ep);
+        const key = ep.identifiedPreset.mcuName.toLowerCase();
+        if (!connectedGroups[key]) connectedGroups[key] = [];
+        connectedGroups[key].push(ep);
       }
     }
 
-    // グループごとに枝番を付与してプリセットを展開
-    for (const [mcuName, group] of Object.entries(mcuGroups)) {
+    // 登録済みプリセットを走査
+    for (const preset of registered) {
+      const key = preset.mcuName.toLowerCase();
+      const connected = connectedGroups[key];
+
+      if (connected && connected.length > 0) {
+        // 接続中 (オンライン): 複数台なら #1, #2 を付与
+        const isMultiple = connected.length > 1;
+        connected.forEach((ep, idx) => {
+          targets.push({
+            ...preset,
+            name: isMultiple ? `${preset.name} (#${idx + 1})` : preset.name,
+            instanceIndex: idx + 1,
+            endpointId: ep.id,
+            isOnline: true
+          });
+        });
+        delete connectedGroups[key]; // 処理済み
+      } else {
+        // 未接続 (オフライン事前設定用)
+        targets.push({
+          ...preset,
+          name: preset.name,
+          isOnline: false
+        });
+      }
+    }
+
+    // 登録リスト外だが接続されているデバイスがあれば追加
+    for (const [, group] of Object.entries(connectedGroups)) {
       const isMultiple = group.length > 1;
       group.forEach((ep, idx) => {
-        const instanceIndex = idx + 1;
         const basePreset = ep.identifiedPreset!;
         targets.push({
           ...basePreset,
-          name: isMultiple ? `${basePreset.name} (#${instanceIndex})` : basePreset.name,
-          instanceIndex,
-          endpointId: ep.id
+          name: isMultiple ? `${basePreset.name} (#${idx + 1})` : basePreset.name,
+          instanceIndex: idx + 1,
+          endpointId: ep.id,
+          isOnline: true
         });
       });
     }

@@ -7,6 +7,7 @@ export interface InstrumentPreset {
   defaultOffsetMs: number;
   instanceIndex?: number; // 同名MCUの枝番 (1, 2, ...)
   endpointId?: string;    // 接続ポートの一意な内部ID
+  isOnline?: boolean;     // 物理接続中フラグ
 }
 
 export const NONE_PRESET: InstrumentPreset = {
@@ -78,4 +79,13 @@ export function registerMcuPreset(mcuName: string, instId: number = 0): Instrume
   const updated = [...current, newPreset];
   saveRegisteredPresets(updated);
   return newPreset;
+}
+
+/**
+ * 登録済み MCU_NAME をストレージから削除
+ */
+export function deleteRegisteredPreset(mcuName: string): void {
+  const current = loadRegisteredPresets();
+  const updated = current.filter(p => p.mcuName.toLowerCase() !== mcuName.toLowerCase());
+  saveRegisteredPresets(updated);
 }
