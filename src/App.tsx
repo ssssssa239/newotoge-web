@@ -554,7 +554,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0A0E1A', color: '#E2EFFF', fontFamily: 'sans-serif' }}>
       {/* 1. トランスポートバー */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '2px solid #DBB28A', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '2px solid #72829F', gap: 12 }}>
         <button
           onClick={() => setIsSidebarOpen(prev => !prev)}
           title={isSidebarOpen ? 'サイドバーを隠す' : 'サイドバーを表示'}
@@ -632,7 +632,7 @@ export function App() {
               gap: 8,
               background: '#1C2742',
               color: '#E2EFFF',
-              border: '1px solid #243B54',
+              border: '1.5px solid #243B54',
               borderRadius: 4,
               padding: '5px 10px',
               fontSize: 12,
@@ -884,7 +884,7 @@ export function App() {
           <div
             style={{
               width: 280,
-              borderRight: '2px solid #DBB28A',
+              borderRight: '2px solid #72829F',
               display: 'flex',
               flexDirection: 'column',
               background: '#1D202C',
@@ -904,14 +904,14 @@ export function App() {
                 pointerEvents: 'none'
               }}
             >
-              <path d="M 12 0 L 12 12 Q 12 0 0 0 Z" fill="#DBB28A" />
+              <path d="M 12 0 L 12 12 Q 12 0 0 0 Z" fill="#72829F" />
             </svg>
 
             {/* 楽曲リスト (残り高さいっぱいに広がり、最小100pxを確保) */}
 
             <div style={{ flex: 1, minHeight: 100, padding: 12, overflowY: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#8FA4C4' }}>楽曲リスト ({songs.length})</span>
+                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#c1cfe3' }}>楽曲リスト ({songs.length})</span>
                 <label style={{ fontSize: 11, background: '#A4D3FF', color: '#101F33', padding: '1px 8px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}>
                   + 追加
                   <input type="file" multiple accept=".mid,.midi" onChange={handleMidiUpload} style={{ display: 'none' }} />
@@ -929,7 +929,7 @@ export function App() {
                     borderRadius: 4,
                     cursor: 'pointer',
                     background: song.id === selectedSongId ? 'rgba(78, 167, 230, 0.12)' : '#181822',
-                    border: song.id === selectedSongId ? '1px solid #A4D3FF' : '1px solid transparent'
+                    border: song.id === selectedSongId ? '1px solid #DBB28A' : '1px solid transparent'
                   }}
                 >
                   <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -961,23 +961,22 @@ export function App() {
               onMouseDown={handleStartResize}
               title="上下にドラッグしてサイズを調整"
               style={{
-                height: 8,
+                height: 4,
                 cursor: 'row-resize',
-                background: isResizingSidebar ? '#202B45' : '#141D34',
-                borderTop: '1px solid #243B54',
-                borderBottom: '1px solid #243B54',
+                background: isResizingSidebar ? '#72829F' : '#72829F',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 userSelect: 'none',
                 transition: 'background 0.15s',
-                zIndex: 10
+                zIndex: 10,
+                position: 'relative' // ★ 相対配置の基準にするため追加
               }}
               onMouseEnter={e => {
-                if (!isResizingSidebar) e.currentTarget.style.background = '#1C2742';
+                if (!isResizingSidebar) e.currentTarget.style.background = '#72829F';
               }}
               onMouseLeave={e => {
-                if (!isResizingSidebar) e.currentTarget.style.background = '#141D34';
+                if (!isResizingSidebar) e.currentTarget.style.background = '#72829F';
               }}
             >
               {/* 控えめな1本バー */}
@@ -985,20 +984,50 @@ export function App() {
                 style={{
                   width: 30,
                   height: 2,
-                  background: isResizingSidebar ? '#A4D3FF' : '#3f4f6c',
+                  background: isResizingSidebar ? '#e1f1ff' : '#29364d',
                   borderRadius: 2
                 }}
               />
+
+              {/* ★★★ 1. 上側の滑らかなアール (12px) ★★★ */}
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 12 12"
+                style={{
+                  position: 'absolute',
+                  top: -12,
+                  right: 0,
+                  pointerEvents: 'none'
+                }}
+              >
+                <path d="M 12 12 L 12 0 Q 12 12 0 12 Z" fill="#72829F" />
+              </svg>
+
+              {/* ★★★ 2. 下側の滑らかなアール (12px) ★★★ */}
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 12 12"
+                style={{
+                  position: 'absolute',
+                  bottom: -12,
+                  right: 0,
+                  pointerEvents: 'none'
+                }}
+              >
+                <path d="M 12 0 L 12 12 Q 12 0 0 0 Z" fill="#72829F" />
+              </svg>
             </div>
 
             {/* MIDIデバイス一覧 */}
             <div style={{ height: devicePanelHeight, padding: 12, overflowY: 'auto', background: '#1D202C' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#8FA4C4' }}>楽器ロボ ({endpoints.length})</span>
+                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#c1cfe3' }}>デバイス一覧 ({endpoints.length})</span>
                 <div style={{ display: 'flex', gap: 5 }}>
                   <button
                     onClick={() => setIsManageModalOpen(true)}
-                    title="楽器ロボの登録・整理"
+                    title="MIDIデバイスの登録・整理"
                     style={{ fontSize: 11, background: '#243B54', border: 'none', color: '#A4D3FF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     管理
@@ -1123,7 +1152,7 @@ export function App() {
                 pointerEvents: 'none'
               }}
             >
-              <path d="M 0 0 L 0 12 Q 0 0 12 0 Z" fill="#DBB28A" />
+              <path d="M 0 0 L 0 12 Q 0 0 12 0 Z" fill="#72829F" />
             </svg>
           )}
 
@@ -1189,9 +1218,7 @@ export function App() {
             </div>
           ) : (
             <div style={{ padding: 24, overflowY: 'auto', height: '100%' }}>
-              <h3 style={{ marginTop: 0 }}>
-                トラック設定 [{activePreset?.name}] - {currentSong?.fileName ? currentSong.fileName.replace(/\.midi?$/i, '') : '未選択'}
-              </h3>
+              
               {currentSong ? (
                 <div>
                   <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1359,7 +1386,7 @@ export function App() {
             style={{
               width: 520,
               background: '#141D34',
-              border: '2px solid #DBB28A',
+              border: '2px solid #72829F',
               borderRadius: 8,
               boxShadow: '0 8px 30px rgba(0,0,0,0.7)',
               padding: 20,
@@ -1370,7 +1397,7 @@ export function App() {
             onClick={e => e.stopPropagation()}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, color: '#DFEEFE' }}>楽器ロボ管理</h3>
+              <h3 style={{ margin: 0, color: '#DFEEFE' }}>デバイス管理</h3>
               <button
                 onClick={() => setIsManageModalOpen(false)}
                 style={{ background: 'transparent', border: 'none', color: '#8FA4C4', fontSize: 16, cursor: 'pointer' }}
