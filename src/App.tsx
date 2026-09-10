@@ -139,6 +139,21 @@ export function App() {
     return `${minutes}:${formattedSec}`;
   };
 
+  // 詳細設定を展開しているスロットIDの一覧
+  const [expandedSlotIds, setExpandedSlotIds] = useState<Set<string>>(new Set());
+
+  const toggleSlotDetails = (slotId: string) => {
+    setExpandedSlotIds(prev => {
+      const next = new Set(prev);
+      if (next.has(slotId)) {
+        next.delete(slotId);
+      } else {
+        next.add(slotId);
+      }
+      return next;
+    });
+  };
+
   // --- 1. 起動時ロード & デバイス購読 (初回マウント時のみ実行) ---
   useEffect(() => {
     const midiMgr = MidiDeviceManager.getInstance();
@@ -437,15 +452,18 @@ export function App() {
     await persistAll(updatedSongs, updatedPresets, nextId);
   };
 
-  const handleAddSlot = async () => {
+  // 通常のレーン追加（親スロットの追加）
+  // 変更後: inheritPreset を受け取れるようにする（未指定時は NONE_PRESET）
+  const handleAddSlot = async (inheritPreset: InstrumentPreset = NONE_PRESET) => {
     if (!currentSong) return;
     const defaultCh = currentSong.usedChannels[0] ?? 0;
     const newSlot: LaneSlot = {
       id: crypto.randomUUID(),
       isEnabled: true,
       selectedChannel: defaultCh,
-      assignedPreset: NONE_PRESET,
-      latencyOffsetMs: 0.0,
+      assignedPreset: inheritPreset,
+      outputChannel: defaultCh,
+      latencyOffsetMs: inheritPreset.defaultOffsetMs ?? 0.0,
       customColor: DEFAULT_CHANNEL_COLORS[defaultCh % 16]
     };
     const updatedSlots = [...currentSong.slots, newSlot];
@@ -457,9 +475,48 @@ export function App() {
     await persistAll(updatedSongs);
   };
 
+  // 詳細設定内での「＋ サブチャンネルを追加」
+  const handleAddChildSlot = async (parentSlot: LaneSlot) => {
+    if (!currentSong) return;
+    const existingChildren = currentSong.slots.filter(s => s.parentId === parentSlot.id);
+    const nextOutputCh = Math.min(15, (parentSlot.outputChannel ?? 0) + existingChildren.length + 1);
+    const defaultCh = currentSong.usedChannels[Math.min(currentSong.usedChannels.length - 1, existingChildren.length + 1)] ?? 0;
+
+    // ★ 親チャンネルと同じ色を取得して初期値にセット
+    const parentColor = parentSlot.customColor || DEFAULT_CHANNEL_COLORS[parentSlot.selectedChannel % 16];
+
+    const newChildSlot: LaneSlot = {
+      id: crypto.randomUUID(),
+      parentId: parentSlot.id,
+      isEnabled: true,
+      selectedChannel: defaultCh,
+      assignedPreset: parentSlot.assignedPreset,
+      outputChannel: nextOutputCh,
+      latencyOffsetMs: parentSlot.latencyOffsetMs,
+      customColor: parentColor // ★ 親と同じ色
+    };
+
+    const updatedSlots = [...currentSong.slots, newChildSlot];
+    const updatedSong = { ...currentSong, slots: updatedSlots };
+    const updatedSongs = songs.map(s => (s.id === currentSong.id ? updatedSong : s));
+
+    setSongs(updatedSongs);
+    PlaybackEngine.getInstance().updateSlotConfiguration(updatedSong);
+    await persistAll(updatedSongs);
+  };
+
   const handleUpdateSlot = async (slotId: string, updates: Partial<LaneSlot>) => {
     if (!currentSong) return;
-    const updatedSlots = currentSong.slots.map(s => (s.id === slotId ? { ...s, ...updates } : s));
+    const updatedSlots = currentSong.slots.map(s => {
+      if (s.id === slotId) {
+        return { ...s, ...updates };
+      }
+      // 親の楽器が変更された場合、子レーンの送信先も連動更新
+      if (s.parentId === slotId && updates.assignedPreset) {
+        return { ...s, assignedPreset: updates.assignedPreset };
+      }
+      return s;
+    });
     const updatedSong = { ...currentSong, slots: updatedSlots };
     const updatedSongs = songs.map(s => (s.id === currentSong.id ? updatedSong : s));
 
@@ -470,7 +527,8 @@ export function App() {
 
   const handleDeleteSlot = async (slotId: string) => {
     if (!currentSong) return;
-    const updatedSlots = currentSong.slots.filter(s => s.id !== slotId);
+    // 対象スロット、およびそれを親とする子スロットもまとめて削除
+    const updatedSlots = currentSong.slots.filter(s => s.id !== slotId && s.parentId !== slotId);
     const updatedSong = { ...currentSong, slots: updatedSlots };
     const updatedSongs = songs.map(s => (s.id === currentSong.id ? updatedSong : s));
 
@@ -554,7 +612,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0A0E1A', color: '#E2EFFF', fontFamily: 'sans-serif' }}>
       {/* 1. トランスポートバー */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '2px solid #72829F', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '3px solid #72829F', gap: 12 }}>
         <button
           onClick={() => setIsSidebarOpen(prev => !prev)}
           title={isSidebarOpen ? 'サイドバーを隠す' : 'サイドバーを表示'}
@@ -565,7 +623,7 @@ export function App() {
             padding: '5px 8px',
             background: isSidebarOpen ? '#243B54' : '#1C2742',
             border: '1px solid #243B54',
-            borderRadius: 4,
+            borderRadius: 6,
             color: '#A4D3FF',
             cursor: 'pointer'
           }}
@@ -578,13 +636,13 @@ export function App() {
 
         <button
           onClick={() => PlaybackEngine.getInstance().togglePlayPause()}
-          style={{ padding: '6px 14px', background: '#587CEA', border: 'none', borderRadius: 4, fontWeight: 'bold', cursor: 'pointer', color: '#ffffff' }}
+          style={{ padding: '6px 14px', background: '#587CEA', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', color: '#ffffff' }}
         >
           {isPlaying ? 'PAUSE' : 'PLAY'}
         </button>
         <button
           onClick={() => PlaybackEngine.getInstance().stop()}
-          style={{ padding: '6px 11px', background: '#3E4163', border: 'none', borderRadius: 4, color: '#E2EFFF', cursor: 'pointer' }}
+          style={{ padding: '6px 11px', background: '#3E4163', border: 'none', borderRadius: 6, color: '#E2EFFF', cursor: 'pointer' }}
         >
           STOP
         </button>
@@ -607,7 +665,7 @@ export function App() {
             setIsMetronome(next);
             PlaybackEngine.getInstance().isMetronomeEnabled = next;
           }}
-          style={{ padding: '4px 8px', background: isMetronome ? '#706cad' : '#1C2742', border: 'none', borderRadius: 4, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
+          style={{ padding: '4px 8px', background: isMetronome ? '#706cad' : '#1C2742', border: 'none', borderRadius: 6, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
         >
           Click {isMetronome ? 'ON' : 'OFF'}
         </button>
@@ -617,7 +675,7 @@ export function App() {
             setIsBgm(next);
             PlaybackEngine.getInstance().isBgmEnabled = next;
           }}
-          style={{ padding: '4px 8px', background: isBgm ? '#8871c4' : '#1C2742', border: 'none', borderRadius: 4, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
+          style={{ padding: '4px 8px', background: isBgm ? '#8871c4' : '#1C2742', border: 'none', borderRadius: 6, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
         >
           BGM {isBgm ? 'ON' : 'OFF'}
         </button>
@@ -633,7 +691,7 @@ export function App() {
               background: '#1C2742',
               color: '#E2EFFF',
               border: '1.5px solid #243B54',
-              borderRadius: 4,
+              borderRadius: 6,
               padding: '5px 10px',
               fontSize: 12,
               cursor: 'pointer'
@@ -761,7 +819,7 @@ export function App() {
         </div>
 
         {/* タブ切り替え */}
-        <div style={{ background: '#1C2742', borderRadius: 4, padding: 2, display: 'flex' }}>
+        <div style={{ background: '#1C2742', borderRadius: 6, padding: 2, display: 'flex' }}>
           <button
             onClick={() => setSelectedTab('visualizer')}
             style={{ padding: '4px 10px', background: selectedTab === 'visualizer' ? '#A4D3FF' : 'transparent', color: selectedTab === 'visualizer' ? '#101F33' : '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
@@ -787,7 +845,7 @@ export function App() {
               padding: 0,
               background: isControlBarOpen ? '#243B54' : '#1C2742',
               border: '1px solid #243B54',
-              borderRadius: 4,
+              borderRadius: 6,
               color: isControlBarOpen ? '#A4D3FF' : '#8FA4C4',
               cursor: 'pointer',
               fontSize: 10,
@@ -812,7 +870,7 @@ export function App() {
                 padding: 0,
                 background: isStorageMenuOpen ? '#243B54' : '#1C2742',
                 border: '1px solid #243B54',
-                borderRadius: 4,
+                borderRadius: 6,
                 color: isStorageMenuOpen ? '#A4D3FF' : '#8FA4C4',
                 cursor: 'pointer',
                 fontSize: 10,
@@ -884,7 +942,7 @@ export function App() {
           <div
             style={{
               width: 280,
-              borderRight: '2px solid #72829F',
+              borderRight: '3px solid #72829F',
               display: 'flex',
               flexDirection: 'column',
               background: '#1D202C',
@@ -912,7 +970,7 @@ export function App() {
             <div style={{ flex: 1, minHeight: 100, padding: 12, overflowY: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 14, fontWeight: 'bold', color: '#c1cfe3' }}>楽曲リスト ({songs.length})</span>
-                <label style={{ fontSize: 11, background: '#A4D3FF', color: '#101F33', padding: '1px 8px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}>
+                <label style={{ fontSize: 11, background: '#A4D3FF', color: '#101F33', padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
                   + 追加
                   <input type="file" multiple accept=".mid,.midi" onChange={handleMidiUpload} style={{ display: 'none' }} />
                 </label>
@@ -926,7 +984,7 @@ export function App() {
                     alignItems: 'center',
                     padding: '8px',
                     marginBottom: 4,
-                    borderRadius: 4,
+                    borderRadius: 6,
                     cursor: 'pointer',
                     background: song.id === selectedSongId ? 'rgba(78, 167, 230, 0.12)' : '#181822',
                     border: song.id === selectedSongId ? '1px solid #DBB28A' : '1px solid transparent'
@@ -1028,20 +1086,20 @@ export function App() {
                   <button
                     onClick={() => setIsManageModalOpen(true)}
                     title="MIDIデバイスの登録・整理"
-                    style={{ fontSize: 11, background: '#243B54', border: 'none', color: '#A4D3FF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ fontSize: 11, background: '#243B54', border: 'none', color: '#A4D3FF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     管理
                   </button>
                   <button
                     onClick={() => MidiDeviceManager.getInstance().probeSerialDeviceManually()}
                     title="USB接続されたマイコンから楽器名を直接取得して自動照合します"
-                    style={{ fontSize: 11, background: '#175883', border: 'none', color: '#E2EFFF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ fontSize: 11, background: '#175883', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     + USB
                   </button>
                   <button
                     onClick={() => MidiDeviceManager.getInstance().connectBleDevice()}
-                    style={{ fontSize: 11, background: '#4058C2', border: 'none', color: '#E2EFFF', padding: '2px 6px', borderRadius: 4, cursor: 'pointer' }}
+                    style={{ fontSize: 11, background: '#4058C2', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     + BLE
                   </button>
@@ -1060,10 +1118,10 @@ export function App() {
                     fontSize: 12,
                     padding: '8px',
                     marginBottom: 6,
-                    borderRadius: 4,
+                    borderRadius: 6,
                     cursor: 'pointer',
                     background: ep.id === selectedEndpointId ? 'rgba(78, 167, 230, 0.12)' : '#181822',
-                    border: ep.id === selectedEndpointId ? '1px solid #587CEA' : '1px solid #243B54'
+                    border: ep.id === selectedEndpointId ? '1px solid #DBB28A' : '0px solid #243B54'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
@@ -1086,7 +1144,7 @@ export function App() {
                         flex: 1,
                         background: '#243B54',
                         color: ep.identifiedPreset && ep.identifiedPreset.id !== 0 ? '#A4D3FF' : '#8FA4C4',
-                        border: '1px solid #4e598c',
+                        border: '1px solid #818cbd',
                         borderRadius: 3,
                         fontSize: 11,
                         padding: '2px 4px'
@@ -1217,151 +1275,381 @@ export function App() {
               </div>
             </div>
           ) : (
-            <div style={{ padding: 24, overflowY: 'auto', height: '100%' }}>
-              
+            /* 外側スクロール領域 */
+            <div style={{ padding: '24px 32px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
               {currentSong ? (
-                <div>
-                  <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <label style={{ fontSize: 12, background: '#175883', padding: '6px 11px', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}>
-                      BGM音声を紐付け (.mp3, .wav, .ogg)
-                      <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: 'none' }} />
-                    </label>
-                    {currentSong.bgmFileName && <span style={{ fontSize: 12, color: '#88D5DA' }}>✓ {currentSong.bgmFileName}</span>}
-                    <button
-                      onClick={handleAddSlot}
-                      style={{ marginLeft: 'auto', fontSize: 12, background: '#A4D3FF', border: 'none', padding: '6px 11px', borderRadius: 4, color: '#101F33', fontWeight: 'bold', cursor: 'pointer' }}
-                    >
-                      + レーン追加
-                    </button>
+                /* ★ Google流: 全体を1つのコンテナにまとめ、中央揃え (margin: 0 auto) にする */
+                <div style={{ maxWidth: 840, margin: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  
+                  {/* 1. 上部コントロールバー（スロット幅と完全に一致） */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <label style={{ fontSize: 12, background: '#175883', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
+                        BGM音声を紐付け (.mp3, .wav, .ogg)
+                        <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: 'none' }} />
+                      </label>
+                      {currentSong.bgmFileName && <span style={{ fontSize: 12, color: '#88D5DA' }}>{currentSong.bgmFileName}</span>}
+                    </div>
+
+                    
                   </div>
 
+                  {/* 2. スロット一覧 */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {currentSong.slots.map(slot => (
-                      <div
-                        key={slot.id}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 16,
-                          padding: '10px 14px',
-                          background: slot.isEnabled ? '#31344b' : '#181822',
-                          border: '1px solid #575b77',
-                          borderRadius: 6
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={slot.isEnabled}
-                          onChange={e => handleUpdateSlot(slot.id, { isEnabled: e.target.checked })}
-                        />
+                    {currentSong.slots.filter(slot => !slot.parentId).map(slot => {
+                      const isExpanded = expandedSlotIds.has(slot.id);
+                      const currentColor = slot.customColor || DEFAULT_CHANNEL_COLORS[slot.selectedChannel % 16];
+                      const childSlots = currentSong.slots.filter(s => s.parentId === slot.id);
+                      const isColorPickerOpenInSlot =
+                        activeColorPickerSlotId === slot.id || childSlots.some(c => c.id === activeColorPickerSlotId);
 
-                        {/* 抽出チャンネル */}
-                        <select
-                          value={slot.selectedChannel}
-                          onChange={e => handleUpdateSlot(slot.id, { selectedChannel: Number(e.target.value) })}
-                          style={{ background: '#2D376A', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 4, padding: '4px 8px' }}
-                        >
-                          {Array.from({ length: 16 }, (_, i) => {
-                            const count = currentSong.channelCaches[i]?.noteCount ?? 0;
-                            return (
-                              <option key={i} value={i}>
-                                Ch {i + 1} ({count} notes)
-                              </option>
-                            );
-                          })}
-                        </select>
-
-                        {/* 送信先楽器 */}
-                        <select
-                          value={
-                            slot.assignedPreset?.endpointId ??
-                            (slot.assignedPreset?.instanceIndex
-                              ? `${slot.assignedPreset.mcuName}#${slot.assignedPreset.instanceIndex}`
-                              : slot.assignedPreset?.mcuName ?? 'None')
-                          }
-                          onChange={e => {
-                            const val = e.target.value;
-                            const target = availableTargets.find(
-                              t => (t.endpointId ? t.endpointId === val : t.mcuName === val)
-                            ) ?? NONE_PRESET;
-                            handleUpdateSlot(slot.id, { assignedPreset: target, latencyOffsetMs: target.defaultOffsetMs });
+                      return (
+                        <div
+                          key={slot.id}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            background: slot.isEnabled ? '#181b2d' : '#181822',
+                            border: isExpanded ? '1px solid #587CEA' : '1px solid #575b77',
+                            borderRadius: 6,
+                            overflow: 'visible',
+                            position: 'relative',
+                            zIndex: isColorPickerOpenInSlot ? 50 : 1
                           }}
-                          style={{ background: '#2D376A', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 4, padding: '4px 8px' }}
                         >
-                          {availableTargets.map(p => {
-                            const optValue = p.endpointId ?? p.mcuName;
-                            const statusIcon = p.id === 0 ? '' : (p.isOnline ? '🟢 ' : '⚪ ');
-                            const statusLabel = p.id !== 0 && !p.isOnline ? ' (未接続)' : '';
-                            return (
-                              <option key={optValue} value={optValue}>
-                                {statusIcon}{p.name}{statusLabel} {p.id !== 0 ? `` : ''}
-                              </option>
-                            );
-                          })}
-                        </select>
+                          {/* メイン行 */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' }}>
+                            <input
+                              type="checkbox"
+                              checked={slot.isEnabled}
+                              onChange={e => handleUpdateSlot(slot.id, { isEnabled: e.target.checked })}
+                            />
 
-                        {/* ★★★ ここに追加: ノーツ色 四角いボックス ＋ 円形カラーパレット ★★★ */}
-                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                          {(() => {
-                            const currentColor = slot.customColor || DEFAULT_CHANNEL_COLORS[slot.selectedChannel % 16];
-                            return (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setActiveColorPickerSlotId(activeColorPickerSlotId === slot.id ? null : slot.id)
-                                  }
-                                  title="ノーツの色を変更"
-                                  style={{
-                                    width: 24,
-                                    height: 24,
-                                    borderRadius: 4,
-                                    background: currentColor,
-                                    border: '2px solid #575B77',
-                                    boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
-                                    cursor: 'pointer',
-                                    padding: 0,
-                                    outline: 'none'
-                                  }}
+                            {/* 抽出チャンネル */}
+                            <select
+                              value={slot.selectedChannel}
+                              onChange={e => handleUpdateSlot(slot.id, { selectedChannel: Number(e.target.value) })}
+                              style={{ background: '#3D4764', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}
+                            >
+                              {Array.from({ length: 16 }, (_, i) => {
+                                const count = currentSong.channelCaches[i]?.noteCount ?? 0;
+                                return (
+                                  <option key={i} value={i}>
+                                    Ch {i + 1} ({count} notes)
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            <span style={{ color: '#6A789A', fontSize: 12 }}>➔</span>
+
+                            {/* 送信先楽器 */}
+                            <select
+                              value={
+                                slot.assignedPreset?.endpointId ??
+                                (slot.assignedPreset?.instanceIndex
+                                  ? `${slot.assignedPreset.mcuName}#${slot.assignedPreset.instanceIndex}`
+                                  : slot.assignedPreset?.mcuName ?? 'None')
+                              }
+                              onChange={e => {
+                                const val = e.target.value;
+                                const target = availableTargets.find(
+                                  t => (t.endpointId ? t.endpointId === val : t.mcuName === val)
+                                ) ?? NONE_PRESET;
+                                handleUpdateSlot(slot.id, { assignedPreset: target, latencyOffsetMs: target.defaultOffsetMs });
+                              }}
+                              style={{ flex: 1, minWidth: 140, background: '#3D4764', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}
+                            >
+                              {availableTargets.map(p => {
+                                const optValue = p.endpointId ?? p.mcuName;
+                                const statusLabel = p.id !== 0 ? (p.isOnline ? ' [接続中]' : ' [未接続]') : '';
+                                return (
+                                  <option key={optValue} value={optValue}>
+                                    {p.name}{statusLabel}
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            {/* ノーツ色 円形カラーピッカー */}
+                            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setActiveColorPickerSlotId(activeColorPickerSlotId === slot.id ? null : slot.id)
+                                }
+                                title="ノーツの色を変更"
+                                style={{
+                                  width: 24,
+                                  height: 24,
+                                  borderRadius: 6,
+                                  background: currentColor,
+                                  border: '2px solid #575B77',
+                                  boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  outline: 'none'
+                                }}
+                              />
+                              {activeColorPickerSlotId === slot.id && (
+                                <CircularColorPicker
+                                  color={currentColor}
+                                  onChange={newColor => handleUpdateSlot(slot.id, { customColor: newColor })}
+                                  onClose={() => setActiveColorPickerSlotId(null)}
                                 />
-                                {activeColorPickerSlotId === slot.id && (
-                                  <CircularColorPicker
-                                    color={currentColor}
-                                    onChange={newColor => handleUpdateSlot(slot.id, { customColor: newColor })}
-                                    onClose={() => setActiveColorPickerSlotId(null)}
-                                  />
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
+                              )}
+                            </div>
 
-                        {/* 遅延補正スライダー */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: 12, minWidth: 50, textAlign: 'right', fontFamily: 'monospace' }}>{slot.latencyOffsetMs}ms</span>
-                          <input
-                            type="range"
-                            min={-200}
-                            max={200}
-                            step={1}
-                            value={slot.latencyOffsetMs}
-                            onChange={e => handleUpdateSlot(slot.id, { latencyOffsetMs: Number(e.target.value) })}
-                            style={{ width: 100 }}
-                          />
-                        </div>
+                            {/* 遅延補正スライダー */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+                              <input
+                                type="range"
+                                min={-200}
+                                max={200}
+                                step={1}
+                                value={slot.latencyOffsetMs}
+                                onChange={e => handleUpdateSlot(slot.id, { latencyOffsetMs: Number(e.target.value) })}
+                                style={{ width: 80 }}
+                              />
+                              <span style={{ fontSize: 11, minWidth: 42, textAlign: 'right', fontFamily: 'monospace', color: '#8FA4C4' }}>
+                                {slot.latencyOffsetMs}ms
+                              </span>
+                            </div>
 
-                        <button
-                          onClick={() => handleDeleteSlot(slot.id)}
-                          style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#666666', cursor: 'pointer', fontSize: 14 }}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
+                            {/* 詳細設定トグルボタン */}
+                            <button
+                              onClick={() => toggleSlotDetails(slot.id)}
+                              style={{
+                                fontSize: 11,
+                                padding: '3px 8px',
+                                background: isExpanded ? '#587CEA' : '#243B54',
+                                border: 'none',
+                                borderRadius: 6,
+                                color: '#E2EFFF',
+                                cursor: 'pointer',
+                                fontWeight: 'bold'
+                              }}
+                            >
+                              {isExpanded ? '詳細 ▲' : '詳細 ▼'}
+                            </button>
+
+                            {/* 削除ボタン */}
+                            <button
+                              onClick={() => handleDeleteSlot(slot.id)}
+                              title="レーンを削除"
+                              style={{
+                                marginLeft: 50,
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#6A789A',
+                                cursor: 'pointer',
+                                fontSize: 13,
+                                padding: '2px 6px'
+                              }}
+                              onMouseEnter={e => (e.currentTarget.style.color = '#FF5555')}
+                              onMouseLeave={e => (e.currentTarget.style.color = '#6A789A')}
+                            >
+                              ✕
+                            </button>
+                          </div>
+
+                          {/* 詳細設定トレイ */}
+                          {isExpanded && (
+                            <div
+                              style={{
+                                background: '#1D2133',
+                                borderTop: '1px solid #3E4766',
+                                padding: '10px 16px 12px 16px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 8,
+                                borderBottomLeftRadius: 5,
+                                borderBottomRightRadius: 5
+                              }}
+                            >
+                              <div style={{ fontSize: 11, color: '#A4D3FF', fontWeight: 'bold', marginBottom: 2 }}>
+                                出力チャンネルルーティング (親デバイス: {slot.assignedPreset?.name ?? 'None'})
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: '#8FA4C4' }}>
+                                <span>基本チャンネルの出力先:</span>
+                                <select
+                                  value={slot.outputChannel ?? slot.selectedChannel}
+                                  onChange={e => handleUpdateSlot(slot.id, { outputChannel: Number(e.target.value) })}
+                                  style={{ background: '#2D376A', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 3, padding: '2px 6px', fontSize: 11 }}
+                                >
+                                  {Array.from({ length: 16 }, (_, i) => (
+                                    <option key={i} value={i}>
+                                      Ch {i + 1}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {childSlots.map((child, cIdx) => {
+                                const childColor = child.customColor || DEFAULT_CHANNEL_COLORS[child.selectedChannel % 16];
+
+                                return (
+                                  <div
+                                    key={child.id}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 12,
+                                      padding: '6px 12px',
+                                      background: '#252B42',
+                                      border: '1px solid #3A4568',
+                                      borderRadius: 4,
+                                      position: 'relative',
+                                      zIndex: activeColorPickerSlotId === child.id ? 60 : 1
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={child.isEnabled}
+                                      onChange={e => handleUpdateSlot(child.id, { isEnabled: e.target.checked })}
+                                    />
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                      <span style={{ fontSize: 11, color: '#8FA4C4' }}>抽出:</span>
+                                      <select
+                                        value={child.selectedChannel}
+                                        onChange={e => handleUpdateSlot(child.id, { selectedChannel: Number(e.target.value) })}
+                                        style={{ background: '#1D243B', color: '#E2EFFF', border: '1px solid #4e598c', borderRadius: 3, padding: '2px 6px', fontSize: 11 }}
+                                      >
+                                        {Array.from({ length: 16 }, (_, i) => (
+                                          <option key={i} value={i}>
+                                            Ch {i + 1}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+
+                                    <span style={{ color: '#6A789A', fontSize: 12 }}>➔</span>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                      <span style={{ fontSize: 11, color: '#A4D3FF' }}>出力:</span>
+                                      <select
+                                        value={child.outputChannel ?? cIdx + 1}
+                                        onChange={e => handleUpdateSlot(child.id, { outputChannel: Number(e.target.value) })}
+                                        style={{ background: '#1D243B', color: '#A4D3FF', border: '1px solid #4e598c', borderRadius: 3, padding: '2px 6px', fontSize: 11 }}
+                                      >
+                                        {Array.from({ length: 16 }, (_, i) => (
+                                          <option key={i} value={i}>
+                                            Ch {i + 1}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+
+                                    {/* 子レーン カラーピッカー */}
+                                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setActiveColorPickerSlotId(activeColorPickerSlotId === child.id ? null : child.id)
+                                        }
+                                        title="ノーツの色を変更"
+                                        style={{
+                                          width: 18,
+                                          height: 18,
+                                          borderRadius: 3,
+                                          background: childColor,
+                                          border: '1px solid #575B77',
+                                          cursor: 'pointer',
+                                          padding: 0
+                                        }}
+                                      />
+                                      {activeColorPickerSlotId === child.id && (
+                                        <CircularColorPicker
+                                          color={childColor}
+                                          onChange={newColor => handleUpdateSlot(child.id, { customColor: newColor })}
+                                          onClose={() => setActiveColorPickerSlotId(null)}
+                                        />
+                                      )}
+                                    </div>
+
+                                    {/* 子レーン 遅延補正 */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+                                      <span style={{ fontSize: 11, minWidth: 42, textAlign: 'right', fontFamily: 'monospace', color: '#8FA4C4' }}>
+                                        {child.latencyOffsetMs}ms
+                                      </span>
+                                      <input
+                                        type="range"
+                                        min={-200}
+                                        max={200}
+                                        step={1}
+                                        value={child.latencyOffsetMs}
+                                        onChange={e => handleUpdateSlot(child.id, { latencyOffsetMs: Number(e.target.value) })}
+                                        style={{ width: 80 }}
+                                      />
+                                    </div>
+
+                                    <button
+                                      onClick={() => handleDeleteSlot(child.id)}
+                                      style={{ background: 'transparent', border: 'none', color: '#666666', cursor: 'pointer', fontSize: 13, padding: '0 4px' }}
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                );
+                              })}
+
+                              {/* サブチャンネル追加 */}
+                              <button
+                                onClick={() => handleAddChildSlot(slot)}
+                                style={{
+                                  alignSelf: 'flex-start',
+                                  fontSize: 11,
+                                  background: '#243B54',
+                                  border: 'none',
+                                  borderRadius: 4,
+                                  color: '#A4D3FF',
+                                  padding: '4px 10px',
+                                  cursor: 'pointer',
+                                  fontWeight: 'bold',
+                                  marginTop: 4
+                                }}
+                              >
+                                + サブチャンネルを追加
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {/* ★ Google Forms/Keep流: リスト最下部にも控えめな追加ボタンを配置 */}
+                    <button
+                      onClick={() => handleAddSlot(NONE_PRESET)}
+                      style={{
+                        padding: '10px',
+                        background: 'transparent',
+                        border: '1.5px dashed #3D4866',
+                        borderRadius: 6,
+                        color: '#8FA4C4',
+                        fontSize: 12,
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        transition: 'border-color 0.2s, color 0.2s'
+                      }}
+                      onMouseEnter={e => {
+                        e.currentTarget.style.borderColor = '#587CEA';
+                        e.currentTarget.style.color = '#A4D3FF';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.borderColor = '#3D4866';
+                        e.currentTarget.style.color = '#8FA4C4';
+                      }}
+                    >
+                      + 新しいレーンを追加
+                    </button>
                   </div>
                 </div>
               ) : (
-                <div style={{ color: '#8FA4C4' }}>左側の楽曲リストから楽曲を選択してください。</div>
+                <div style={{ color: '#8FA4C4', textAlign: 'center', marginTop: 40 }}>
+                  左側の楽曲リストから楽曲を選択してください。
+                </div>
               )}
             </div>
           )}
@@ -1455,7 +1743,7 @@ export function App() {
                         background: isOnline ? '#2C3446' : '#FF4444',
                         color: isOnline ? '#6A768F' : '#ffffff',
                         border: 'none',
-                        borderRadius: 4,
+                        borderRadius: 6,
                         fontSize: 11,
                         cursor: isOnline ? 'not-allowed' : 'pointer',
                         fontWeight: 'bold'
@@ -1484,7 +1772,7 @@ export function App() {
                     flex: 1,
                     background: '#1C2742',
                     border: '1px solid #243B54',
-                    borderRadius: 4,
+                    borderRadius: 6,
                     color: '#E2EFFF',
                     padding: '6px 10px',
                     fontSize: 12
@@ -1495,7 +1783,7 @@ export function App() {
                   style={{
                     background: '#587CEA',
                     border: 'none',
-                    borderRadius: 4,
+                    borderRadius: 6,
                     color: '#ffffff',
                     padding: '4px 12px',
                     fontSize: 12,

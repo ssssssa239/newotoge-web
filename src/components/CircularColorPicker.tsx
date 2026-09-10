@@ -97,7 +97,7 @@ export function CircularColorPicker({ color, onChange, onClose }: CircularColorP
       onClick={e => e.stopPropagation()}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-        <span style={{ fontSize: 11, fontWeight: 'bold', color: '#8FA4C4' }}>ノーツカラー設定</span>
+        <span style={{ fontSize: 11, fontWeight: 'bold', color: '#cad4e0' }}>ノーツカラー設定</span>
         <button
           onClick={onClose}
           style={{ background: 'transparent', border: 'none', color: '#8FA4C4', cursor: 'pointer', fontSize: 12, padding: 0 }}
@@ -156,7 +156,7 @@ export function CircularColorPicker({ color, onChange, onClose }: CircularColorP
 
       {/* 明度調整スライダー */}
       <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 10, color: '#8FA4C4' }}>明度:</span>
+        <span style={{ fontSize: 10, color: '#e6e6e6' }}>明度:</span>
         <input
           type="range"
           min={25}
@@ -167,7 +167,7 @@ export function CircularColorPicker({ color, onChange, onClose }: CircularColorP
             setLightness(val);
             onChange(hslToHex(hue, 100, val));
           }}
-          style={{ flex: 1, accentColor: '#A4D3FF' }}
+          style={{ flex: 1, accentColor: '#e6e6e6' }}
         />
       </div>
 
@@ -203,7 +203,7 @@ export function CircularColorPicker({ color, onChange, onClose }: CircularColorP
           background: '#1C2742',
           color: '#A4D3FF',
           padding: '4px 0',
-          borderRadius: 4,
+          borderRadius: 6,
           cursor: 'pointer',
           border: '1px solid #243B54'
         }}

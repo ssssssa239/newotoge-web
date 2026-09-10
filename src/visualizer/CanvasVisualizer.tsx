@@ -43,58 +43,76 @@ function getHitLuminescentColor(hexColor: string): string {
   return `rgb(${blendR}, ${blendG}, ${blendB})`;
 }
 
-interface VisualizerLane {
+// レーン内で統合描画される各チャンネル（親ChまたはサブCh）の情報
+interface VisualizerSubTrack {
   channel: number;
+  color: string;
+  latencyOffsetMs: number;
+}
+
+interface VisualizerLane {
+  id: string;
   title: string;
   presetId: number;
   isAssigned: boolean;
-  color: string;
-  noteCount: number;
+  color: string; // ヘッダーアンダーライン用の代表色
+  subTracks: VisualizerSubTrack[];
+  totalNoteCount: number;
 }
 
-// レーン情報の算出 (slot.customColor を最優先で反映)
+// レーン情報の算出 (親スロットのみをレーン化し、子スロットを統合)
 function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): VisualizerLane[] {
   if (!song) return [];
-  const activeSlots = song.slots.filter(s => s.isEnabled && s.assignedPreset.id !== 0);
 
   if (!showAllChannels) {
-    return activeSlots.map(slot => {
-      const count = song.channelCaches[slot.selectedChannel]?.noteCount ?? 0;
-      // customColor があれば優先、なければデフォルト色
-      const color = slot.customColor || DEFAULT_CHANNEL_COLORS[slot.selectedChannel % 16];
-      return {
+    // 親スロット（parentId が未設定、有効、かつ未割当以外）のみを抽出
+    const parentSlots = song.slots.filter(s => s.isEnabled && !s.parentId && s.assignedPreset.id !== 0);
+
+    return parentSlots.map(parent => {
+      const parentColor = parent.customColor || DEFAULT_CHANNEL_COLORS[parent.selectedChannel % 16];
+      // この親スロットに紐づく有効な子スロット（サブチャンネル）を抽出
+      const childSlots = song.slots.filter(s => s.isEnabled && s.parentId === parent.id);
+
+      const allSlots = [parent, ...childSlots];
+      const subTracks: VisualizerSubTrack[] = allSlots.map(slot => ({
         channel: slot.selectedChannel,
-        title: slot.assignedPreset.name,
-        presetId: slot.assignedPreset.id,
+        color: slot.customColor || DEFAULT_CHANNEL_COLORS[slot.selectedChannel % 16],
+        latencyOffsetMs: slot.latencyOffsetMs || 0
+      }));
+
+      const totalNoteCount = subTracks.reduce((sum, st) => {
+        return sum + (song.channelCaches[st.channel]?.noteCount ?? 0);
+      }, 0);
+
+      return {
+        id: parent.id,
+        title: parent.assignedPreset.name,
+        presetId: parent.assignedPreset.id,
         isAssigned: true,
-        color,
-        noteCount: count
+        color: parentColor,
+        subTracks,
+        totalNoteCount
       };
     });
   } else {
+    // showAllChannels が ON の場合はデバッグ用に全Chを個別表示
     return song.usedChannels.map(ch => {
       const count = song.channelCaches[ch]?.noteCount ?? 0;
-      const slot = activeSlots.find(s => s.selectedChannel === ch);
-      if (slot) {
-        const color = slot.customColor || DEFAULT_CHANNEL_COLORS[ch % 16];
-        return {
+      const slot = song.slots.find(s => s.isEnabled && s.selectedChannel === ch);
+      const color = slot?.customColor || DEFAULT_CHANNEL_COLORS[ch % 16];
+      return {
+        id: `ch_${ch}`,
+        title: slot ? slot.assignedPreset.name : `Ch ${ch + 1}`,
+        presetId: slot ? slot.assignedPreset.id : 0,
+        isAssigned: !!slot,
+        color: slot ? color : 'rgba(115, 115, 122, 0.45)',
+        subTracks: [{
           channel: ch,
-          title: slot.assignedPreset.name,
-          presetId: slot.assignedPreset.id,
-          isAssigned: true,
-          color,
-          noteCount: count
-        };
-      } else {
-        return {
-          channel: ch,
-          title: 'None',
-          presetId: 0,
-          isAssigned: false,
-          color: 'rgba(115, 115, 122, 0.45)',
-          noteCount: count
-        };
-      }
+          color: slot ? color : 'rgba(115, 115, 122, 0.45)',
+          latencyOffsetMs: slot?.latencyOffsetMs || 0
+        }],
+        totalNoteCount: count
+      };
     });
   }
 }
@@ -186,8 +204,6 @@ export const CanvasVisualizer: React.FC<Props> = ({
         }
       }
 
-      
-
       // 2. レーン境界線
       ctx.strokeStyle = isChromaKeyEnabled ? 'rgba(0, 0, 0, 0.3)' : 'rgba(36, 59, 84, 0.7)';
       ctx.lineWidth = 1.5;
@@ -205,59 +221,82 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
       for (let i = 0; i < lanes.length; i++) {
         const lane = lanes[i];
-        const cache = song.channelCaches[lane.channel];
-        if (!cache || cache.noteCount === 0) continue;
+        if (lane.totalNoteCount === 0) continue;
 
-        const visibleNotes = cache.visibleNotes(topMs, bottomMs);
-        const laneX = i * laneWidth;
-        const minP = cache.minPitch;
-        const maxP = cache.maxPitch;
+        // この親レーンに属する全チャンネルの音域（minPitch, maxPitch）を統合算出
+        let minP = 127;
+        let maxP = 0;
+        let hasNotes = false;
+
+        for (const st of lane.subTracks) {
+          const cache = song.channelCaches[st.channel];
+          if (cache && cache.noteCount > 0) {
+            minP = Math.min(minP, cache.minPitch);
+            maxP = Math.max(maxP, cache.maxPitch);
+            hasNotes = true;
+          }
+        }
+
+        if (!hasNotes) continue;
+
         const pitchRange = Math.max(1, maxP - minP);
-
+        const laneX = i * laneWidth;
         const stepX = (laneWidth - 16) / pitchRange;
         const baseNoteWidth = Math.max(6, Math.min(stepX - 1.5, 28));
 
-        // このレーンの発光色を事前計算
-        const hitLuminescentColor = getHitLuminescentColor(lane.color);
+        // 親チャンネル ＋ サブチャンネルのノーツを同一レーン内に重ねて描画
+        for (const st of lane.subTracks) {
+          const cache = song.channelCaches[st.channel];
+          if (!cache || cache.noteCount === 0) continue;
 
-        for (const note of visibleNotes) {
-          const yBottom = judgeLineY - (note.startTimeMs - currentMs) * speed;
-          const yTop = judgeLineY - (note.endTimeMs - currentMs) * speed;
-          const noteHeight = Math.max(4, yBottom - yTop);
+          // 各チャンネルの遅延補正を考慮して描画対象ノーツを抽出
+          const offsetMs = st.latencyOffsetMs;
+          const effectiveTopMs = topMs - offsetMs;
+          const effectiveBottomMs = bottomMs - offsetMs;
 
-          const p = Math.min(Math.max(note.pitch, minP), maxP);
-          const innerX = 8 + (p - minP) * stepX;
+          const visibleNotes = cache.visibleNotes(effectiveTopMs, effectiveBottomMs);
+          const hitLuminescentColor = getHitLuminescentColor(st.color);
 
-          const isHit = currentMs >= note.startTimeMs && currentMs <= note.endTimeMs;
+          for (const note of visibleNotes) {
+            const noteStartWithOffset = note.startTimeMs + offsetMs;
+            const noteEndWithOffset = note.endTimeMs + offsetMs;
 
-          // ヒット時はわずかに横幅を広げてインパクトを表現（+2px）
-          const currentWidth = isHit ? baseNoteWidth + 2 : baseNoteWidth;
-          const x = Math.round(laneX + innerX - currentWidth / 2);
+            const yBottom = judgeLineY - (noteStartWithOffset - currentMs) * speed;
+            const yTop = judgeLineY - (noteEndWithOffset - currentMs) * speed;
+            const noteHeight = Math.max(4, yBottom - yTop);
 
-          // ★ 音ゲー風ネオングロー（外光オーラ）設定
-          if (isHit && !isChromaKeyEnabled) {
-            ctx.shadowColor = lane.color;
-            ctx.shadowBlur = 15;
-          } else {
+            const p = Math.min(Math.max(note.pitch, minP), maxP);
+            const innerX = 8 + (p - minP) * stepX;
+
+            const isHit = currentMs >= noteStartWithOffset && currentMs <= noteEndWithOffset;
+
+            // ヒット時は横幅を広げてインパクトを表現（+2px）
+            const currentWidth = isHit ? baseNoteWidth + 2 : baseNoteWidth;
+            const x = Math.round(laneX + innerX - currentWidth / 2);
+
+            // 音ゲー風ネオングロー
+            if (isHit && !isChromaKeyEnabled) {
+              ctx.shadowColor = st.color;
+              ctx.shadowBlur = 15;
+            } else {
+              ctx.shadowBlur = 0;
+            }
+
+            // ① ノーツ本体の塗り（各チャンネル固有の色を反映）
+            ctx.fillStyle = isHit ? hitLuminescentColor : st.color;
+            ctx.beginPath();
+            ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.5);
+            ctx.fill();
+
+            // ② 境界線・輪郭
+            ctx.strokeStyle = isChromaKeyEnabled
+              ? (isHit ? '#FFFFFF' : 'rgba(0, 0, 0, 0.5)')
+              : (isHit ? '#FFFFFF' : 'rgba(10, 14, 26, 0.75)');
+            ctx.lineWidth = isHit ? 1.5 : 1.2;
+            ctx.stroke();
+
             ctx.shadowBlur = 0;
           }
-
-          // ① ノーツ本体の塗り
-          ctx.fillStyle = isHit ? hitLuminescentColor : lane.color;
-          ctx.beginPath();
-          ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.5);
-          ctx.fill();
-
-          // ② 境界線・輪郭
-          // ヒット時は純白の細いコアライン、通常時は暗めのフチ取り
-          ctx.strokeStyle = isChromaKeyEnabled
-            ? (isHit ? '#FFFFFF' : 'rgba(0, 0, 0, 0.5)')
-            : (isHit ? '#FFFFFF' : 'rgba(10, 14, 26, 0.75)');
-          ctx.lineWidth = isHit ? 1.5 : 1.2;
-          ctx.stroke();
-
-          // シャドウを即座にリセットして他要素への影響を防止
-          ctx.shadowBlur = 0;
         }
       }
 
@@ -278,7 +317,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
-      {/* 1. 各レーンの上部ヘッダーバー */}
+      {/* 1. 各親レーンの上部ヘッダーバー */}
       {lanes.length > 0 && (
         <div
           style={{
@@ -292,7 +331,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
         >
           {lanes.map((lane, index) => (
             <div
-              key={`${lane.channel}_${index}`}
+              key={`${lane.id}_${index}`}
               style={{
                 flex: 1,
                 display: 'flex',

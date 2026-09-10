@@ -3,10 +3,12 @@ import { InstrumentPreset } from './InstrumentPreset';
 export interface LaneSlot {
   id: string;
   isEnabled: boolean;
-  selectedChannel: number;
-  assignedPreset: InstrumentPreset;
+  selectedChannel: number;      // MIDIファイル内の抽出元Ch (0-15)
+  assignedPreset: InstrumentPreset; // 送信先マイコン
+  outputChannel?: number;       // 送信先Ch / 弦指定 (0-15)
   latencyOffsetMs: number;
-  customColor?: string; // ← 追加: ノーツのカスタムカラー (HEX)
+  customColor?: string;
+  parentId?: string;            // 親スロットのID（子レーンのみ指定）
 }
 
 export interface EnsemblePreset {
