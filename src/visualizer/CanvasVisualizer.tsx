@@ -98,21 +98,48 @@ function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): Vi
     // showAllChannels が ON の場合はデバッグ用に全Chを個別表示
     return song.usedChannels.map(ch => {
       const count = song.channelCaches[ch]?.noteCount ?? 0;
-      const slot = song.slots.find(s => s.isEnabled && s.selectedChannel === ch);
-      const color = slot?.customColor || DEFAULT_CHANNEL_COLORS[ch % 16];
-      return {
-        id: `ch_${ch}`,
-        title: slot ? slot.assignedPreset.name : `Ch ${ch + 1}`,
-        presetId: slot ? slot.assignedPreset.id : 0,
-        isAssigned: !!slot,
-        color: slot ? color : 'rgba(115, 115, 122, 0.45)',
-        subTracks: [{
-          channel: ch,
-          color: slot ? color : 'rgba(115, 115, 122, 0.45)',
-          latencyOffsetMs: slot?.latencyOffsetMs || 0
-        }],
-        totalNoteCount: count
-      };
+      
+      // ★ 楽器が実際に割り当てられている（None ではない）有効なスロットを検索
+      const slot = song.slots.find(
+        s => s.isEnabled &&
+             s.selectedChannel === ch &&
+             s.assignedPreset &&
+             s.assignedPreset.id !== 0 &&
+             s.assignedPreset.mcuName !== 'None'
+      );
+
+      if (slot) {
+        const color = slot.customColor || DEFAULT_CHANNEL_COLORS[ch % 16];
+        return {
+          id: `ch_${ch}`,
+          title: slot.assignedPreset.name,
+          presetId: slot.assignedPreset.id,
+          isAssigned: true,
+          color,
+          subTracks: [{
+            channel: ch,
+            color,
+            latencyOffsetMs: slot.latencyOffsetMs || 0
+          }],
+          totalNoteCount: count
+        };
+      } else {
+        // ★ 未割当（None）の場合はグレー色を設定
+        const grayColor = 'rgba(115, 115, 122, 0.45)';
+        return {
+          id: `ch_${ch}`,
+          title: 'None',
+          presetId: 0,
+          isAssigned: false,
+          color: grayColor,
+          subTracks: [{
+            channel: ch,
+            color: grayColor,
+            latencyOffsetMs: 0
+          }],
+          totalNoteCount: count
+        };
+      }
     });
   }
 }
