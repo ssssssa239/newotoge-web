@@ -987,16 +987,16 @@ export function App() {
                     padding: '6px 12px',
                     fontSize: 12,
                     cursor: 'pointer',
-                    color: '#FF4444',
+                    color: '#b48dcb',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 6
+                    gap: 0
                   }}
                   onMouseEnter={e => (e.currentTarget.style.background = '#1C2742')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <span></span>
-                  <span>現在のプリセットを削除</span>
+                  <span>⚠︎ 現在のプリセットを削除</span>
                 </div>
               )}
             </div>
@@ -1155,7 +1155,7 @@ export function App() {
             <div style={{ flex: 1, minHeight: 100, padding: 12, overflowY: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 14, fontWeight: 'bold', color: '#c1cfe3' }}>楽曲リスト ({songs.length})</span>
-                <label style={{ fontSize: 11, background: '#A4D3FF', color: '#101F33', padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
+                <label style={{ fontSize: 11, background: '#5D7FAF', color: '#E2EFFF', padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
                   + 追加
                   <input type="file" multiple accept=".mid,.midi" onChange={handleMidiUpload} style={{ display: 'none' }} />
                 </label>
@@ -1623,7 +1623,7 @@ export function App() {
                                 style={{
                                   width: '100%',
                                   background: '#3D4764',
-                                  color: slot.assignedPreset?.id !== 0 ? '#70aae0' : '#E2EFFF',
+                                  color: slot.assignedPreset?.id !== 0 ? '#5D7FAF' : '#E2EFFF',
                                   border: '1px solid #4e598c',
                                   borderRadius: 6,
                                   padding: '5px 8px',
@@ -1745,7 +1745,7 @@ export function App() {
             style={{
               width: 520,
               background: '#141D34',
-              border: '2px solid #72829F',
+              border: '1.5px solid #DBB28A',
               borderRadius: 8,
               boxShadow: '0 8px 30px rgba(0,0,0,0.7)',
               padding: 20,
@@ -1810,8 +1810,8 @@ export function App() {
                       disabled={isOnline}
                       title={isOnline ? '物理接続中のため削除できません' : 'プリセットを削除'}
                       style={{
-                        padding: '4px 10px',
-                        background: isOnline ? '#2C3446' : '#FF4444',
+                        padding: '4px 8px',
+                        background: isOnline ? '#2C3446' : '#7a4699',
                         color: isOnline ? '#6A768F' : '#ffffff',
                         border: 'none',
                         borderRadius: 6,
@@ -1852,7 +1852,7 @@ export function App() {
                 <button
                   onClick={handleRegisterManualMcu}
                   style={{
-                    background: '#587CEA',
+                    background: '#5D7FAF',
                     border: 'none',
                     borderRadius: 6,
                     color: '#ffffff',

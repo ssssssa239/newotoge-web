@@ -1,6 +1,7 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { MidiSongData, MidiNote } from '../models/SongModels';
 import { PlaybackEngine } from '../engine/audio/PlaybackEngine';
+
 
 
 interface Props {
@@ -164,9 +165,10 @@ export const CanvasVisualizer: React.FC<Props> = ({
   showDebugHUD = false
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [hudText, setHudText] = useState('');
+  const hudRef = useRef<HTMLDivElement | null>(null); // ★ 追加: DOMを直接操作するref
 
-  const lanes = getRenderLanes(song, showAllChannels);
+  // ★ 修正: useMemo でメモ化し、50msごとの無駄な再生成・タイマーリセットを完全に防ぐ
+  const lanes = useMemo(() => getRenderLanes(song, showAllChannels), [song, showAllChannels]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -187,7 +189,10 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
       if (now - lastFpsUpdate >= 500) {
         const fps = (frameCount * 1000) / (now - lastFpsUpdate);
-        setHudText(`FPS: ${fps.toFixed(1)} | Delta: ${delta.toFixed(1)}ms`);
+        // ★ 修正: 直接テキストを書き込む (Reactの再描画を発生させない)
+        if (hudRef.current) {
+          hudRef.current.textContent = `FPS: ${fps.toFixed(1)} | Delta: ${delta.toFixed(1)}ms`;
+        }
         frameCount = 0;
         lastFpsUpdate = now;
       }
@@ -474,6 +479,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
         {showDebugHUD && (
           <div
+            ref={hudRef} // ★ ref をバインド
             style={{
               position: 'absolute',
               bottom: 12,
@@ -488,7 +494,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
               zIndex: 10
             }}
           >
-            {hudText}
+            FPS: -- | Delta: --
           </div>
         )}
       </div>
