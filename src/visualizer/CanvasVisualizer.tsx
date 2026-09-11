@@ -46,6 +46,7 @@ function getHitLuminescentColor(hexColor: string): string {
 // レーン内で統合描画される各チャンネル（親ChまたはサブCh）の情報
 interface VisualizerSubTrack {
   channel: number;
+  trackIndex?: number; // ★ この行を追加
   color: string;
   latencyOffsetMs: number;
 }
@@ -60,86 +61,76 @@ interface VisualizerLane {
   totalNoteCount: number;
 }
 
-// レーン情報の算出 (親スロットのみをレーン化し、子スロットを統合)
+// レーン情報の算出 (送信先デバイスごとにグループ化し、複数トラックを統合描画)
 function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): VisualizerLane[] {
   if (!song) return [];
 
   if (!showAllChannels) {
-    // 親スロット（parentId が未設定、有効、かつ未割当以外）のみを抽出
-    const parentSlots = song.slots.filter(s => s.isEnabled && !s.parentId && s.assignedPreset.id !== 0);
+    const map = new Map<string, VisualizerLane>();
 
-    return parentSlots.map(parent => {
-      const parentColor = parent.customColor || DEFAULT_CHANNEL_COLORS[parent.selectedChannel % 16];
-      // この親スロットに紐づく有効な子スロット（サブチャンネル）を抽出
-      const childSlots = song.slots.filter(s => s.isEnabled && s.parentId === parent.id);
+    for (const slot of song.slots) {
+      if (!slot.isEnabled) continue;
 
-      const allSlots = [parent, ...childSlots];
-      const subTracks: VisualizerSubTrack[] = allSlots.map(slot => ({
+      // 対象トラックを取得
+      const track = song.tracks?.find(t => t.trackIndex === slot.trackIndex);
+      const noteCount = track ? track.notes.length : (song.channelCaches[slot.selectedChannel]?.noteCount ?? 0);
+      if (noteCount === 0) continue;
+
+      const preset = slot.assignedPreset;
+      const isAssigned = !!(preset && preset.id !== 0 && preset.mcuName !== 'None');
+
+      // 送信先デバイスごとにグループキーを生成
+      const groupKey = isAssigned
+        ? (preset.endpointId ? `${preset.mcuName}_${preset.endpointId}` : preset.mcuName)
+        : `unassigned_${slot.id}`;
+
+      const slotColor = slot.customColor || DEFAULT_CHANNEL_COLORS[(slot.trackIndex ?? slot.selectedChannel) % 16];
+
+      if (!map.has(groupKey)) {
+        map.set(groupKey, {
+          id: groupKey,
+          title: isAssigned ? preset.name : (track?.name ?? `Track ${(slot.trackIndex ?? 0) + 1}`),
+          presetId: isAssigned ? preset.id : 0,
+          isAssigned,
+          color: slotColor,
+          subTracks: [],
+          totalNoteCount: 0
+        });
+      }
+
+      const lane = map.get(groupKey)!;
+      lane.subTracks.push({
         channel: slot.selectedChannel,
-        color: slot.customColor || DEFAULT_CHANNEL_COLORS[slot.selectedChannel % 16],
+        trackIndex: slot.trackIndex,
+        color: slotColor,
         latencyOffsetMs: slot.latencyOffsetMs || 0
-      }));
+      });
+      lane.totalNoteCount += noteCount;
+    }
 
-      const totalNoteCount = subTracks.reduce((sum, st) => {
-        return sum + (song.channelCaches[st.channel]?.noteCount ?? 0);
-      }, 0);
+    return Array.from(map.values());
+  } else {
+    // デバッグ全表示モード
+    const tracksToDisplay = (song.tracks && song.tracks.length > 0) ? song.tracks : [];
+    return tracksToDisplay.map((tr, idx) => {
+      const slot = song.slots.find(s => s.trackIndex === tr.trackIndex);
+      const isAssigned = !!(slot && slot.assignedPreset && slot.assignedPreset.id !== 0 && slot.assignedPreset.mcuName !== 'None');
+      const color = slot?.customColor || DEFAULT_CHANNEL_COLORS[idx % 16];
 
       return {
-        id: parent.id,
-        title: parent.assignedPreset.name,
-        presetId: parent.assignedPreset.id,
-        isAssigned: true,
-        color: parentColor,
-        subTracks,
-        totalNoteCount
-      };
-    });
-  } else {
-    // showAllChannels が ON の場合はデバッグ用に全Chを個別表示
-    return song.usedChannels.map(ch => {
-      const count = song.channelCaches[ch]?.noteCount ?? 0;
-      
-      // ★ 楽器が実際に割り当てられている（None ではない）有効なスロットを検索
-      const slot = song.slots.find(
-        s => s.isEnabled &&
-             s.selectedChannel === ch &&
-             s.assignedPreset &&
-             s.assignedPreset.id !== 0 &&
-             s.assignedPreset.mcuName !== 'None'
-      );
-
-      if (slot) {
-        const color = slot.customColor || DEFAULT_CHANNEL_COLORS[ch % 16];
-        return {
-          id: `ch_${ch}`,
-          title: slot.assignedPreset.name,
-          presetId: slot.assignedPreset.id,
-          isAssigned: true,
+        id: `tr_${tr.trackIndex}`,
+        title: tr.name,
+        presetId: isAssigned && slot ? slot.assignedPreset.id : 0,
+        isAssigned,
+        color,
+        subTracks: [{
+          channel: tr.notes[0]?.channel ?? 0,
+          trackIndex: tr.trackIndex,
           color,
-          subTracks: [{
-            channel: ch,
-            color,
-            latencyOffsetMs: slot.latencyOffsetMs || 0
-          }],
-          totalNoteCount: count
-        };
-      } else {
-        // ★ 未割当（None）の場合はグレー色を設定
-        const grayColor = 'rgba(115, 115, 122, 0.45)';
-        return {
-          id: `ch_${ch}`,
-          title: 'None',
-          presetId: 0,
-          isAssigned: false,
-          color: grayColor,
-          subTracks: [{
-            channel: ch,
-            color: grayColor,
-            latencyOffsetMs: 0
-          }],
-          totalNoteCount: count
-        };
-      }
+          latencyOffsetMs: slot?.latencyOffsetMs || 0
+        }],
+        totalNoteCount: tr.notes.length
+      };
     });
   }
 }
@@ -274,15 +265,22 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
         // 親チャンネル ＋ サブチャンネルのノーツを同一レーン内に重ねて描画
         for (const st of lane.subTracks) {
-          const cache = song.channelCaches[st.channel];
-          if (!cache || cache.noteCount === 0) continue;
-
           // 各チャンネルの遅延補正を考慮して描画対象ノーツを抽出
           const offsetMs = st.latencyOffsetMs;
           const effectiveTopMs = topMs - offsetMs;
           const effectiveBottomMs = bottomMs - offsetMs;
 
-          const visibleNotes = cache.visibleNotes(effectiveTopMs, effectiveBottomMs);
+          // ★ trackIndex があればトラックから、なければ従来のチャンネルキャッシュから安全に取得
+          let allNotes = (typeof st.trackIndex === 'number' && song.tracks)
+            ? song.tracks.find(t => t.trackIndex === st.trackIndex)?.notes ?? []
+            : (song.channelCaches[st.channel]?.notes ?? []);
+
+          if (allNotes.length === 0) continue;
+
+          // 表示範囲内のノーツをフィルタリング
+          const visibleNotes = allNotes.filter(
+            n => n.endTimeMs >= effectiveTopMs && n.startTimeMs <= effectiveBottomMs
+          );
           const hitLuminescentColor = getHitLuminescentColor(st.color);
 
           for (const note of visibleNotes) {

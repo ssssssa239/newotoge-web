@@ -4,6 +4,14 @@ import {
 } from '../../models/SongModels';
 import { INSTRUMENT_PRESETS } from '../../models/InstrumentPreset';
 
+// デフォルトのチャンネル・トラック割り当て色
+const DEFAULT_CHANNEL_COLORS = [
+  '#FF4D4D', '#FF8533', '#FFC000', '#2ECC71',
+  '#00D2D3', '#3498DB', '#9B59B6', '#E056FD',
+  '#FF6B81', '#1DD1A1', '#F368E0', '#54A0FF',
+  '#5F27CD', '#C8D6E5', '#FF9F43', '#10AC84'
+];
+
 class DataReader {
   private view: DataView;
   public offset: number = 0;
@@ -353,7 +361,7 @@ export class MidiParser {
       channelCaches[ch] = new ChannelCache(channelBuckets[ch]);
     }
 
-    // 拍・小節イベント (BeatEvent) 精密生成
+    // 拍・小節イベント (BeatEvent) 生成
     const beatEvents: BeatEvent[] = [];
     if (totalDurationMs > 0) {
       let curTick = 0;
@@ -378,13 +386,32 @@ export class MidiParser {
       .filter(ch => channelCaches[ch].noteCount > 0)
       .sort((a, b) => a - b);
 
-    const defaultSlots: LaneSlot[] = usedChannels.map(ch => ({
-      id: crypto.randomUUID(),
-      isEnabled: true,
-      selectedChannel: ch,
-      assignedPreset: INSTRUMENT_PRESETS[0], // None
-      latencyOffsetMs: 0.0
-    }));
+    // ★ Format 0 (単一トラックに複数Ch混在) の場合はチャンネルごとに仮想トラックを生成
+    let finalTracks = parsedTracks.filter(t => t.notes.length > 0);
+    if (finalTracks.length <= 1 && usedChannels.length > 1) {
+      finalTracks = usedChannels.map((ch, idx) => ({
+        id: idx,
+        trackIndex: idx,
+        name: `Ch ${ch + 1}`,
+        channel: ch,
+        notes: channelBuckets[ch]
+      }));
+    }
+
+    // トラック起点で初期スロットを生成
+    const defaultSlots: LaneSlot[] = finalTracks.map((tr, idx) => {
+      const primaryCh = tr.notes[0]?.channel ?? (tr.channel ?? 0);
+      return {
+        id: crypto.randomUUID(),
+        isEnabled: true,
+        trackIndex: tr.trackIndex,
+        selectedChannel: primaryCh,
+        outputChannel: primaryCh,
+        assignedPreset: INSTRUMENT_PRESETS[0], // None
+        latencyOffsetMs: 0.0,
+        customColor: DEFAULT_CHANNEL_COLORS[idx % 16]
+      };
+    });
 
     return {
       id,
@@ -393,7 +420,7 @@ export class MidiParser {
       ppq,
       durationMs: totalDurationMs,
       totalTicks: maxTick,
-      tracks: parsedTracks,
+      tracks: finalTracks,
       slots: defaultSlots,
       tempoEvents,
       timeSignatureEvents,

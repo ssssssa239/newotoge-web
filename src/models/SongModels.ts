@@ -4,6 +4,7 @@ export interface LaneSlot {
   id: string;
   isEnabled: boolean;
   selectedChannel: number;      // MIDIファイル内の抽出元Ch (0-15)
+  trackIndex?: number;
   assignedPreset: InstrumentPreset; // 送信先マイコン
   outputChannel?: number;       // 送信先Ch / 弦指定 (0-15)
   latencyOffsetMs: number;

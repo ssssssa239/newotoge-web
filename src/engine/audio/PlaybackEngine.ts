@@ -1,4 +1,4 @@
-import { MidiSongData, BeatEvent } from '../../models/SongModels';
+import { MidiSongData, BeatEvent, LaneSlot, MidiNote } from '../../models/SongModels';
 import { MidiDeviceManager } from '../midi/MidiDeviceManager';
 import { UnifiedMidiEndpoint } from '../midi/types';
 
@@ -334,8 +334,25 @@ export class PlaybackEngine {
 
     for (const slot of this.activeSong.slots) {
       if (!slot.isEnabled || !slot.assignedPreset || slot.assignedPreset.id === 0 || slot.assignedPreset.mcuName === 'None') continue;
-      const cache = this.activeSong.channelCaches[slot.selectedChannel];
-      if (!cache || cache.noteCount === 0) continue;
+
+      // ★ スロットに紐づくノート一覧を安全に取得
+      let notesToSchedule: MidiNote[] = [];
+      if (typeof slot.trackIndex === 'number' && this.activeSong.tracks) {
+        const targetTrack = this.activeSong.tracks.find(t => t.trackIndex === slot.trackIndex);
+        if (targetTrack) {
+          notesToSchedule = targetTrack.notes;
+        }
+      }
+      
+      // トラックが見つからない、または旧データの場合は従来の channelCaches から取得（完全な後方互換）
+      if (notesToSchedule.length === 0) {
+        const cache = this.activeSong.channelCaches[slot.selectedChannel];
+        if (cache && cache.noteCount > 0) {
+          notesToSchedule = cache.notes;
+        }
+      }
+
+      if (notesToSchedule.length === 0) continue;
 
       const candidates = endpoints.filter(
         ep =>
@@ -356,9 +373,10 @@ export class PlaybackEngine {
       }
 
       const offset = slot.latencyOffsetMs;
-      const sendChannel = slot.outputChannel ?? slot.assignedPreset.midiChannel;
+      // 送信チャンネル (outputChannel が未設定なら selectedChannel)
+      const sendChannel = slot.outputChannel ?? slot.selectedChannel;
 
-      for (const note of cache.notes) {
+      for (const note of notesToSchedule) {
         const onMs = note.startTimeMs + offset;
         const offMs = note.endTimeMs + offset;
         if (offMs > fromMs) {
