@@ -3,7 +3,7 @@ import { MidiDeviceManager } from './engine/midi/MidiDeviceManager';
 import { PlaybackEngine } from './engine/audio/PlaybackEngine';
 import { MidiParser } from './engine/parser/MidiParser';
 import { StorageManager, SongMetadata } from './storage/StorageManager';
-import { MidiSongData, EnsemblePreset, LaneSlot } from './models/SongModels';
+import { MidiSongData, EnsemblePreset, LaneSlot, MidiTrackInfo } from './models/SongModels';
 import { UnifiedMidiEndpoint } from './engine/midi/types';
 import { loadRegisteredPresets, registerMcuPreset, deleteRegisteredPreset, InstrumentPreset, NONE_PRESET } from './models/InstrumentPreset';
 import { CanvasVisualizer } from './visualizer/CanvasVisualizer';
@@ -557,18 +557,36 @@ export function App() {
     await persistAll(updatedSongs);
   };
 
-  const handleUpdateSlot = async (slotId: string, updates: Partial<LaneSlot>) => {
+  // スロットの更新ハンドラ（未登録スロットの自動追加対応）
+  const handleUpdateSlot = async (slotId: string, updates: Partial<LaneSlot>, fallbackTrack?: MidiTrackInfo) => {
     if (!currentSong) return;
-    const updatedSlots = currentSong.slots.map(s => {
-      if (s.id === slotId) {
-        return { ...s, ...updates };
-      }
-      // 親の楽器が変更された場合、子レーンの送信先も連動更新
-      if (s.parentId === slotId && updates.assignedPreset) {
-        return { ...s, assignedPreset: updates.assignedPreset };
-      }
-      return s;
-    });
+
+    const exists = currentSong.slots.some(s => s.id === slotId);
+    let updatedSlots: LaneSlot[];
+
+    if (exists) {
+      updatedSlots = currentSong.slots.map(s => {
+        if (s.id === slotId) {
+          return { ...s, ...updates };
+        }
+        return s;
+      });
+    } else {
+      // ★ slotId が未保存の仮想スロット（auto_X）の場合、新規スロットとして登録
+      const newSlot: LaneSlot = {
+        id: crypto.randomUUID(),
+        isEnabled: true,
+        trackIndex: updates.trackIndex ?? fallbackTrack?.trackIndex ?? 0,
+        selectedChannel: updates.selectedChannel ?? fallbackTrack?.notes[0]?.channel ?? 0,
+        outputChannel: updates.outputChannel ?? fallbackTrack?.notes[0]?.channel ?? 0,
+        assignedPreset: updates.assignedPreset ?? NONE_PRESET,
+        latencyOffsetMs: updates.latencyOffsetMs ?? 0.0,
+        customColor: updates.customColor ?? DEFAULT_CHANNEL_COLORS[(updates.trackIndex ?? 0) % 16],
+        ...updates
+      };
+      updatedSlots = [...currentSong.slots, newSlot];
+    }
+
     const updatedSong = { ...currentSong, slots: updatedSlots };
     const updatedSongs = songs.map(s => (s.id === currentSong.id ? updatedSong : s));
 
@@ -1516,8 +1534,8 @@ export function App() {
                         ? currentSong.tracks.filter(t => t.notes.length > 0)
                         : [];
 
+                      // ★★★ 変更箇所 2 START ★★★
                       return tracks.map((track, idx) => {
-                        // trackIndexで対応スロットを検索（見つからなければ自動フォールバック生成）
                         let slot = currentSong.slots.find(s => s.trackIndex === track.trackIndex);
                         if (!slot) {
                           slot = {
@@ -1551,11 +1569,12 @@ export function App() {
                               transition: 'background 0.15s'
                             }}
                           >
-                            {/* 有効 / 無効 チェックボックス */}
+                            {/* ① 有効 / 無効 チェックボックス */}
                             <input
                               type="checkbox"
                               checked={slot.isEnabled}
-                              onChange={e => handleUpdateSlot(slot.id, { isEnabled: e.target.checked })}
+                              /* ★ 引数末尾に , track を追加 */
+                              onChange={e => handleUpdateSlot(slot.id, { isEnabled: e.target.checked }, track)}
                               style={{ width: 16, height: 16, cursor: 'pointer' }}
                             />
 
@@ -1581,7 +1600,7 @@ export function App() {
 
                             <span style={{ color: '#6A789A', fontSize: 12 }}>➔</span>
 
-                            {/* 送信先ポート（デバイス） */}
+                            {/* ② 送信先ポート（デバイス） */}
                             <div style={{ flex: 1, minWidth: 140 }}>
                               <select
                                 value={
@@ -1595,10 +1614,11 @@ export function App() {
                                   const target = availableTargets.find(
                                     t => (t.endpointId ? t.endpointId === val : t.mcuName === val)
                                   ) ?? NONE_PRESET;
+                                  /* ★ 引数末尾に , track を追加 */
                                   handleUpdateSlot(slot.id, {
                                     assignedPreset: target,
                                     latencyOffsetMs: target.defaultOffsetMs ?? slot.latencyOffsetMs
-                                  });
+                                  }, track);
                                 }}
                                 style={{
                                   width: '100%',
@@ -1622,12 +1642,13 @@ export function App() {
                               </select>
                             </div>
 
-                            {/* 送信チャンネル (Ch 1〜16) */}
+                            {/* ③ 送信チャンネル (Ch 1〜16) */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                               <span style={{ fontSize: 11, color: '#8FA4C4' }}>送信Ch:</span>
                               <select
                                 value={slot.outputChannel ?? (track.notes[0]?.channel ?? 0)}
-                                onChange={e => handleUpdateSlot(slot.id, { outputChannel: Number(e.target.value) })}
+                                /* ★ 引数末尾に , track を追加 */
+                                onChange={e => handleUpdateSlot(slot.id, { outputChannel: Number(e.target.value) }, track)}
                                 style={{
                                   background: '#3D4764',
                                   color: '#E2EFFF',
@@ -1659,19 +1680,21 @@ export function App() {
                                   border: '2px solid #575B77',
                                   boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
                                   cursor: 'pointer',
-                                  padding: 0
+                                  padding: 0,
+                                  outline: 'none'
                                 }}
                               />
                               {isColorPickerOpen && (
                                 <CircularColorPicker
                                   color={currentColor}
-                                  onChange={newColor => handleUpdateSlot(slot.id, { customColor: newColor })}
+                                  /* ★ 引数末尾に , track を追加 */
+                                  onChange={newColor => handleUpdateSlot(slot.id, { customColor: newColor }, track)}
                                   onClose={() => setActiveColorPickerSlotId(null)}
                                 />
                               )}
                             </div>
 
-                            {/* 遅延補正スライダー */}
+                            {/* ④ 遅延補正スライダー */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                               <input
                                 type="range"
@@ -1679,7 +1702,8 @@ export function App() {
                                 max={200}
                                 step={1}
                                 value={slot.latencyOffsetMs}
-                                onChange={e => handleUpdateSlot(slot.id, { latencyOffsetMs: Number(e.target.value) })}
+                                /* ★ 引数末尾に , track を追加 */
+                                onChange={e => handleUpdateSlot(slot.id, { latencyOffsetMs: Number(e.target.value) }, track)}
                                 style={{ width: 75 }}
                               />
                               <span style={{ fontSize: 11, minWidth: 42, textAlign: 'right', fontFamily: 'monospace', color: '#8FA4C4' }}>
@@ -1689,6 +1713,7 @@ export function App() {
                           </div>
                         );
                       });
+// ★★★ 変更箇所 2 END ★★★
                     })()}
                   </div>
                 </div>
