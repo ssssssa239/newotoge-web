@@ -38,7 +38,7 @@ export class PlaybackEngine {
 
   public isMetronomeEnabled = true;
 
-  // BGM 有効/無効フラグ (GainNode と連動)
+  // BGM 有効/無効フラグ
   private _isBgmEnabled = true;
 
   public get isBgmEnabled(): boolean {
@@ -66,6 +66,22 @@ export class PlaybackEngine {
   private timerWorkerId: number | null = null;
   private listeners: Set<(isPlaying: boolean, currentMs: number) => void> = new Set();
 
+  // ★ カウントイン（オフセット/プリロール）設定
+  public isCountInEnabled = false;
+  public countInBars = 1;
+  private prerollTargetMs = 0; // 本編アンミュート開始目標位置
+  private isPrerollBgmStarted = false;
+
+  // 現在プリロール中かどうか & 目標の再生開始位置 (ms) を公開
+  public getPrerollInfo(): { isPrerolling: boolean; targetMs: number } {
+    const curMs = this.getCurrentPlaybackMs();
+    const isPrerolling = this.isPlayingState && this.isCountInEnabled && curMs < this.prerollTargetMs;
+    return {
+      isPrerolling,
+      targetMs: this.prerollTargetMs
+    };
+  }
+
   private constructor() {}
 
   public static getInstance(): PlaybackEngine {
@@ -92,9 +108,6 @@ export class PlaybackEngine {
     return this.audioCtx;
   }
 
-  /**
-   * Swift版と同様、15msの合成サイン波エンベロープバッファを生成
-   */
   private createClickBuffers(ctx: AudioContext): void {
     const sampleRate = ctx.sampleRate;
     const length = Math.floor(sampleRate * 0.015);
@@ -143,7 +156,48 @@ export class PlaybackEngine {
       return this.pausedPositionMs;
     }
     const elapsedSec = this.audioCtx.currentTime - this.playbackStartAudioTime;
-    return Math.min(this.totalDurationMs, this.startOffsetPositionMs + elapsedSec * 1000.0);
+    return this.startOffsetPositionMs + elapsedSec * 1000.0;
+  }
+
+  public setCountInConfig(enabled: boolean, bars: number): void {
+    this.isCountInEnabled = enabled;
+    this.countInBars = bars;
+  }
+
+  private getFirstNoteTimeMs(): number {
+    if (!this.activeSong) return Infinity;
+    let firstMs = Infinity;
+    for (const cache of Object.values(this.activeSong.channelCaches)) {
+      if (cache && cache.notes.length > 0) {
+        if (cache.notes[0].startTimeMs < firstMs) {
+          firstMs = cache.notes[0].startTimeMs;
+        }
+      }
+    }
+    return firstMs;
+  }
+
+  public getMainTempoBpm(): number {
+    if (!this.activeSong || this.activeSong.beatEvents.length === 0) return 120;
+
+    const firstNoteMs = this.getFirstNoteTimeMs();
+    const beats = this.activeSong.beatEvents;
+
+    const targetIdx = firstNoteMs === Infinity
+      ? 0
+      : beats.findIndex(b => b.timeMs >= firstNoteMs - 20);
+
+    const validIdx = targetIdx >= 0 ? targetIdx : 0;
+
+    if (validIdx < beats.length - 1) {
+      const delta = beats[validIdx + 1].timeMs - beats[validIdx].timeMs;
+      if (delta > 0) return Math.round(60000 / delta);
+    } else if (validIdx > 0) {
+      const delta = beats[validIdx].timeMs - beats[validIdx - 1].timeMs;
+      if (delta > 0) return Math.round(60000 / delta);
+    }
+
+    return 120;
   }
 
   public togglePlayPause(): void {
@@ -161,14 +215,38 @@ export class PlaybackEngine {
     if (this.pausedPositionMs >= this.totalDurationMs) {
       this.pausedPositionMs = 0;
     }
-    this.startOffsetPositionMs = this.pausedPositionMs;
+
+    const targetMs = this.pausedPositionMs;
+    this.prerollTargetMs = targetMs;
+    this.isPrerollBgmStarted = false;
+
+    // 案A: オフセットが有効な場合、指定小節数分だけ手前から再生スタート
+    if (this.isCountInEnabled) {
+      const bpm = this.getMainTempoBpm();
+      const beatMs = 60000 / bpm;
+      const barMs = beatMs * 4; // 4/4拍子
+      const prerollMs = this.countInBars * barMs;
+
+      this.startOffsetPositionMs = targetMs - prerollMs;
+    } else {
+      this.startOffsetPositionMs = targetMs;
+    }
+
     this.playbackStartAudioTime = ctx.currentTime;
     this.isPlayingState = true;
 
-    this.rebuildSchedule(this.startOffsetPositionMs);
-    this.playBgm(this.startOffsetPositionMs);
+    // MIDIノートは targetMs 以降のみをスケジュール（プリロール中は発音しない）
+    this.rebuildSchedule(targetMs);
 
-    // 3ms 高精度スケジューリングループ（Web Worker風のsetInterval）
+    // ビート（メトロノーム）は preroll 開始位置から設定
+    this.setupBeatSchedule(this.startOffsetPositionMs);
+
+    // プリロールが不要（または0ms手前でない）ならBGM即時再生
+    if (!this.isCountInEnabled) {
+      this.playBgm(targetMs);
+      this.isPrerollBgmStarted = true;
+    }
+
     this.timerWorkerId = window.setInterval(() => {
       this.processTick();
     }, 3);
@@ -178,7 +256,8 @@ export class PlaybackEngine {
 
   public pause(): void {
     if (!this.isPlayingState) return;
-    this.pausedPositionMs = this.getCurrentPlaybackMs();
+    const curMs = this.getCurrentPlaybackMs();
+    this.pausedPositionMs = Math.max(0, curMs);
     this.isPlayingState = false;
 
     if (this.timerWorkerId !== null) {
@@ -211,8 +290,40 @@ export class PlaybackEngine {
     this.activeSong = song;
     if (this.isPlayingState) {
       const curMs = this.getCurrentPlaybackMs();
-      this.rebuildSchedule(curMs);
+      this.rebuildSchedule(Math.max(this.prerollTargetMs, curMs));
     }
+  }
+
+  private setupBeatSchedule(fromMs: number): void {
+    if (!this.activeSong) return;
+    const baseBeats = [...this.activeSong.beatEvents];
+
+    // 0ms手前の負の時間がある場合、本編BPMで負の拍を合成
+    if (fromMs < 0) {
+      const bpm = this.getMainTempoBpm();
+      const beatMs = 60000 / bpm;
+      const syntheticBeats: BeatEvent[] = [];
+
+      let currentT = 0;
+      let count = 0;
+      while (currentT > fromMs - beatMs) {
+        currentT -= beatMs;
+        count++;
+        syntheticBeats.unshift({
+          timeMs: Math.round(currentT),
+          isAccent: count % 4 === 0,
+          // ★ 不足していたプロパティを追加（0ms手前の負の小節・拍を計算）
+          barIndex: -Math.ceil(count / 4),
+          beatIndex: (4 - (count % 4)) % 4
+        });
+      }
+      this.beatList = [...syntheticBeats, ...baseBeats];
+    } else {
+      this.beatList = baseBeats;
+    }
+
+    this.nextBeatIdx = this.beatList.findIndex(b => b.timeMs >= fromMs);
+    if (this.nextBeatIdx === -1) this.nextBeatIdx = this.beatList.length;
   }
 
   private rebuildSchedule(fromMs: number): void {
@@ -226,7 +337,6 @@ export class PlaybackEngine {
       const cache = this.activeSong.channelCaches[slot.selectedChannel];
       if (!cache || cache.noteCount === 0) continue;
 
-      // 1. 同名 MCU_NAME のエンドポイント候補を抽出
       const candidates = endpoints.filter(
         ep =>
           ep.identifiedPreset &&
@@ -234,7 +344,6 @@ export class PlaybackEngine {
           ep.identifiedPreset.mcuName.toLowerCase() === slot.assignedPreset.mcuName.toLowerCase()
       );
 
-      // 2. endpointId の完全一致、または枝番 (instanceIndex: 1, 2...) によるポート特定
       let matchedEp: UnifiedMidiEndpoint | undefined;
       if (slot.assignedPreset.endpointId) {
         matchedEp = candidates.find(ep => ep.id === slot.assignedPreset.endpointId);
@@ -243,11 +352,11 @@ export class PlaybackEngine {
         matchedEp = candidates[slot.assignedPreset.instanceIndex - 1];
       }
       if (!matchedEp) {
-        matchedEp = candidates[0]; // フォールバック
+        matchedEp = candidates[0];
       }
 
       const offset = slot.latencyOffsetMs;
-      const sendChannel = slot.assignedPreset.midiChannel;
+      const sendChannel = slot.outputChannel ?? slot.assignedPreset.midiChannel;
 
       for (const note of cache.notes) {
         const onMs = note.startTimeMs + offset;
@@ -269,10 +378,6 @@ export class PlaybackEngine {
     this.scheduledNotes = items;
     this.nextNoteIdx = items.findIndex(n => n.adjustedOnTimeMs >= fromMs);
     if (this.nextNoteIdx === -1) this.nextNoteIdx = items.length;
-
-    this.beatList = this.activeSong.beatEvents;
-    this.nextBeatIdx = this.beatList.findIndex(b => b.timeMs >= fromMs);
-    if (this.nextBeatIdx === -1) this.nextBeatIdx = this.beatList.length;
   }
 
   private processTick(): void {
@@ -280,19 +385,27 @@ export class PlaybackEngine {
     const midiMgr = MidiDeviceManager.getInstance();
     const epMap = new Map(midiMgr.getEndpoints().map(ep => [ep.id, ep]));
 
-    // 1. Note On 送信
-    while (this.nextNoteIdx < this.scheduledNotes.length && this.scheduledNotes[this.nextNoteIdx].adjustedOnTimeMs <= curMs) {
-      const item = this.scheduledNotes[this.nextNoteIdx++];
-      if (item.endpointId && epMap.has(item.endpointId)) {
-        const ep = epMap.get(item.endpointId)!;
-        const status = 0x90 | (item.channel & 0x0f);
-        midiMgr.sendBytes(ep, [status, item.pitch & 0x7f, item.velocity & 0x7f]);
-        this.activeNotes.push({
-          channel: item.channel,
-          endpointId: item.endpointId,
-          pitch: item.pitch,
-          offTimeMs: item.adjustedOffTimeMs
-        });
+    // プリロール終了判定: targetMs に到達したらBGMを開始
+    if (!this.isPrerollBgmStarted && curMs >= this.prerollTargetMs) {
+      this.playBgm(this.prerollTargetMs);
+      this.isPrerollBgmStarted = true;
+    }
+
+    // 1. Note On 送信（プリロール目標位置に到達している場合のみ）
+    if (curMs >= this.prerollTargetMs) {
+      while (this.nextNoteIdx < this.scheduledNotes.length && this.scheduledNotes[this.nextNoteIdx].adjustedOnTimeMs <= curMs) {
+        const item = this.scheduledNotes[this.nextNoteIdx++];
+        if (item.endpointId && epMap.has(item.endpointId)) {
+          const ep = epMap.get(item.endpointId)!;
+          const status = 0x90 | (item.channel & 0x0f);
+          midiMgr.sendBytes(ep, [status, item.pitch & 0x7f, item.velocity & 0x7f]);
+          this.activeNotes.push({
+            channel: item.channel,
+            endpointId: item.endpointId,
+            pitch: item.pitch,
+            offTimeMs: item.adjustedOffTimeMs
+          });
+        }
       }
     }
 
@@ -316,7 +429,7 @@ export class PlaybackEngine {
     if (this.nextBeatIdx < this.beatList.length && this.beatList[this.nextBeatIdx].timeMs <= curMs) {
       const beat = this.beatList[this.nextBeatIdx++];
       if (this.isMetronomeEnabled) {
-        this.playClick(beat.isAccent);
+        this.checkAndPlayBeat(beat);
       }
     }
 
@@ -324,6 +437,32 @@ export class PlaybackEngine {
     if (curMs >= this.totalDurationMs && this.totalDurationMs > 0) {
       this.stop();
     }
+  }
+
+  private checkAndPlayBeat(beat: BeatEvent): void {
+    const firstNoteMs = this.getFirstNoteTimeMs();
+
+    // 負の拍（0ms未満のカウントイン）は本編テンポで生成されているため常に鳴らす
+    if (beat.timeMs >= 0 && beat.timeMs < firstNoteMs - 20) {
+      const mainBpm = this.getMainTempoBpm();
+      const idx = this.beatList.indexOf(beat);
+      let currentBeatBpm = 120;
+
+      if (idx >= 0 && idx < this.beatList.length - 1) {
+        const delta = this.beatList[idx + 1].timeMs - beat.timeMs;
+        if (delta > 0) currentBeatBpm = Math.round(60000 / delta);
+      } else if (idx > 0) {
+        const delta = beat.timeMs - this.beatList[idx - 1].timeMs;
+        if (delta > 0) currentBeatBpm = Math.round(60000 / delta);
+      }
+
+      // 本編BPMと異なるデフォルトテンポ（120等）であればミュート
+      if (Math.abs(currentBeatBpm - mainBpm) >= 2) {
+        return;
+      }
+    }
+
+    this.playClick(beat.isAccent);
   }
 
   private playClick(isAccent: boolean): void {
@@ -334,14 +473,14 @@ export class PlaybackEngine {
     const source = this.audioCtx.createBufferSource();
     source.buffer = buf;
     source.connect(this.audioCtx.destination);
-    source.start();
+    source.start(this.audioCtx.currentTime);
   }
 
   private playBgm(fromMs: number): void {
     if (!this.audioCtx || !this.bgmBuffer) return;
     this.stopBgm();
 
-    const startSec = fromMs / 1000.0;
+    const startSec = Math.max(0, fromMs) / 1000.0;
     if (startSec >= this.bgmBuffer.duration) return;
 
     if (this.bgmGain) {

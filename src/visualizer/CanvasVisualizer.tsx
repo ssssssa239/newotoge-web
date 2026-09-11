@@ -203,6 +203,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
       const engine = PlaybackEngine.getInstance();
       const currentMs = engine.getCurrentPlaybackMs();
+      const { isPrerolling, targetMs } = engine.getPrerollInfo();
       const judgeLineY = height * 0.8;
       const speed = scrollSpeedPxPerMs;
       const laneWidth = width / lanes.length;
@@ -309,11 +310,15 @@ export const CanvasVisualizer: React.FC<Props> = ({
               ctx.shadowBlur = 0;
             }
 
-            // ① ノーツ本体の塗り（各チャンネル固有の色を反映）
-            ctx.fillStyle = isHit ? hitLuminescentColor : st.color;
-            ctx.beginPath();
-            ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.5);
-            ctx.fill();
+            // ★ プリロール中のノーツ（目標位置より前）は透過度を下げて暗く見せる
+          const isPrerollNote = isPrerolling && noteStartWithOffset < targetMs;
+          ctx.globalAlpha = isPrerollNote ? 0.30 : 1.0; // 薄くする
+
+          // ① ノーツ本体の塗り
+          ctx.fillStyle = isHit ? hitLuminescentColor : st.color;
+          ctx.beginPath();
+          ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.5);
+          ctx.fill();
 
             // ② 境界線・輪郭
             ctx.strokeStyle = isChromaKeyEnabled
@@ -322,8 +327,31 @@ export const CanvasVisualizer: React.FC<Props> = ({
             ctx.lineWidth = isHit ? 1.5 : 1.2;
             ctx.stroke();
 
+            ctx.globalAlpha = 1.0; // リセット
+
             ctx.shadowBlur = 0;
           }
+        }
+      }
+
+      // ★ プリロール中のみ、本編が始まる位置にマーカー線を描画
+      if (isPrerolling && targetMs > currentMs) {
+        const targetY = Math.round(judgeLineY - (targetMs - currentMs) * speed);
+        if (targetY >= 0 && targetY <= height) {
+          ctx.save();
+          ctx.strokeStyle = '#A4D3FF';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]); // 破線
+          ctx.beginPath();
+          ctx.moveTo(0, targetY);
+          ctx.lineTo(width, targetY);
+          ctx.stroke();
+
+          // 右端に「START」と小さくラベル表示
+          ctx.fillStyle = '#A4D3FF';
+          ctx.font = 'bold 10px monospace';
+          //ctx.fillText('PLAYBACK START', width - 110, targetY - 5);
+          ctx.restore();
         }
       }
 

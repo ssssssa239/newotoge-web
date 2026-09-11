@@ -61,6 +61,16 @@ export function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [scrollSpeed, setScrollSpeed] = useState(0.20);
 
+  // オフセット（カウントイン）設定
+  const [isMetroMenuOpen, setIsMetroMenuOpen] = useState(false);
+  const [isCountInEnabled, setIsCountInEnabled] = useState(false);
+  const [countInBars, setCountInBars] = useState(1);
+  const metroMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // 楽曲リストのドラッグ＆ドロップ並び替え状態
+  const [draggedSongIndex, setDraggedSongIndex] = useState<number | null>(null);
+  const [dragOverSongIndex, setDragOverSongIndex] = useState<number | null>(null);
+
   // ストレージ情報
   const [isStorageMenuOpen, setIsStorageMenuOpen] = useState(false);
   const [storageInfo, setStorageInfo] = useState<{ usage: number; quota: number } | null>(null);
@@ -79,6 +89,9 @@ export function App() {
       if (storageMenuRef.current && !storageMenuRef.current.contains(target)) {
         setIsStorageMenuOpen(false);
       }
+      if (metroMenuRef.current && !metroMenuRef.current.contains(target)) {
+      setIsMetroMenuOpen(false);
+    }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
@@ -334,6 +347,25 @@ export function App() {
     }
 
     await persistAll(updatedSongs, updatedPresets);
+  };
+
+  const handleDropSong = async (targetIndex: number) => {
+    if (draggedSongIndex === null || draggedSongIndex === targetIndex) {
+      setDraggedSongIndex(null);
+      setDragOverSongIndex(null);
+      return;
+    }
+
+    const updated = [...songs];
+    const [movedItem] = updated.splice(draggedSongIndex, 1);
+    updated.splice(targetIndex, 0, movedItem);
+
+    setSongs(updated);
+    setDraggedSongIndex(null);
+    setDragOverSongIndex(null);
+
+    // 変更後の並び順をストレージへ保存
+    await persistAll(updated);
   };
 
   const handleSelectSong = async (song: MidiSongData) => {
@@ -659,16 +691,131 @@ export function App() {
           {formatTime(currentPlaybackMs)} / {formatTime(currentSong?.durationMs ?? 0)}
         </span>
 
-        <button
-          onClick={() => {
-            const next = !isMetronome;
-            setIsMetronome(next);
-            PlaybackEngine.getInstance().isMetronomeEnabled = next;
+        {/* Click スプリットボタン（左: ON/OFF切替 / 右: オフセット設定メニュー） */}
+        <div
+          ref={metroMenuRef}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            background: isMetronome ? '#706cad' : '#1C2742',
+            borderRadius: 6,
+            position: 'relative'
           }}
-          style={{ padding: '4px 8px', background: isMetronome ? '#706cad' : '#1C2742', border: 'none', borderRadius: 6, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
         >
-          Click {isMetronome ? 'ON' : 'OFF'}
-        </button>
+          {/* 左側ボタンに minWidth を指定して幅の変動をロック */}
+          <button
+            onClick={() => {
+              const next = !isMetronome;
+              setIsMetronome(next);
+              PlaybackEngine.getInstance().isMetronomeEnabled = next;
+            }}
+            style={{
+              minWidth: 94, // ★ 幅をあらかじめ固定してレイアウトシフトをゼロにする
+              textAlign: 'center',
+              padding: '4px 6px',
+              background: 'transparent',
+              border: 'none',
+              color: '#E2EFFF',
+              fontSize: 11,
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              borderTopLeftRadius: 6,
+              borderBottomLeftRadius: 6
+            }}
+          >
+            Click {isMetronome ? 'ON' : 'OFF'}
+            {isCountInEnabled && <span style={{ fontSize: 9, marginLeft: 3, opacity: 0.85 }}>({countInBars}小節)</span>}
+          </button>
+
+          {/* 細い区切り線 */}
+          <div style={{ width: 1, height: 12, background: isMetronome ? 'rgba(255,255,255,0.25)' : '#243B54' }} />
+
+          {/* 右側: ドロップダウンアクセスボタン */}
+          <button
+            onClick={() => setIsMetroMenuOpen(prev => !prev)}
+            title="オフセット設定"
+            style={{
+              padding: '4px 6px',
+              background: 'transparent',
+              border: 'none',
+              color: '#E2EFFF',
+              fontSize: 8,
+              cursor: 'pointer',
+              borderTopRightRadius: 6,
+              borderBottomRightRadius: 6,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            ▼
+          </button>
+
+          {/* ドロップダウンメニュー（オフセット設定のみ） */}
+          {isMetroMenuOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 5px)',
+                left: 0,
+                width: 200,
+                background: '#141D34',
+                border: '1px solid #DBB28A',
+                borderRadius: 6,
+                boxShadow: '0 6px 18px rgba(0,0,0,0.6)',
+                padding: '10px 12px',
+                zIndex: 1000,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#8FA4C4', borderBottom: '1px solid #243B54', paddingBottom: 4 }}>
+                オフセット再生設定
+              </div>
+
+              {/* オフセット有効/無効 */}
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, cursor: 'pointer' }}>
+                <span style={{ color: '#E2EFFF' }}>オフセット再生</span>
+                <input
+                  type="checkbox"
+                  checked={isCountInEnabled}
+                  onChange={e => {
+                    const next = e.target.checked;
+                    setIsCountInEnabled(next);
+                    PlaybackEngine.getInstance().setCountInConfig(next, countInBars);
+                  }}
+                />
+              </label>
+
+              {/* オフセット小節数 */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', opacity: isCountInEnabled ? 1 : 0.45 }}>
+                <span style={{ fontSize: 11, color: '#8FA4C4' }}>助走小節数:</span>
+                <select
+                  disabled={!isCountInEnabled}
+                  value={countInBars}
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setCountInBars(val);
+                    PlaybackEngine.getInstance().setCountInConfig(isCountInEnabled, val);
+                  }}
+                  style={{
+                    background: '#1C2742',
+                    color: '#E2EFFF',
+                    border: '1px solid #243B54',
+                    borderRadius: 4,
+                    fontSize: 11,
+                    padding: '2px 6px'
+                  }}
+                >
+                  <option value={1}>1 小節</option>
+                  <option value={2}>2 小節</option>
+                  <option value={4}>4 小節</option>
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
         <button
           onClick={() => {
             const next = !isBgm;
@@ -975,43 +1122,95 @@ export function App() {
                   <input type="file" multiple accept=".mid,.midi" onChange={handleMidiUpload} style={{ display: 'none' }} />
                 </label>
               </div>
-              {songs.map(song => (
-                <div
-                  key={song.id}
-                  onClick={() => handleSelectSong(song)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    padding: '8px',
-                    marginBottom: 4,
-                    borderRadius: 6,
-                    cursor: 'pointer',
-                    background: song.id === selectedSongId ? 'rgba(78, 167, 230, 0.12)' : '#181822',
-                    border: song.id === selectedSongId ? '1px solid #DBB28A' : '1px solid transparent'
-                  }}
-                >
-                  <div style={{ flex: 1, overflow: 'hidden' }}>
-                    <div style={{ fontSize: 13, fontWeight: song.id === selectedSongId ? 'bold' : 'normal', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
-                      {song.fileName.replace(/\.midi?$/i, '')}
-                    </div>
-                    <div style={{ fontSize: 11, color: '#8FA4C4', marginTop: 2 }}>
-                      {formatTime(song.durationMs)} {song.bgmFileName && '• BGM付'}
-                    </div>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteSong(song);
+              {songs.map((song, index) => {
+                const isSelected = song.id === selectedSongId;
+                const isDragging = draggedSongIndex === index;
+                const isDragOver = dragOverSongIndex === index;
+
+                return (
+                  <div
+                    key={song.id}
+                    draggable
+                    onDragStart={e => {
+                      setDraggedSongIndex(index);
+                      e.dataTransfer.effectAllowed = 'move';
                     }}
-                    title="楽曲を削除"
-                    style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', padding: 4, fontSize: 12 }}
-                    onMouseEnter={e => (e.currentTarget.style.color = '#FF4444')}
-                    onMouseLeave={e => (e.currentTarget.style.color = '#666')}
+                    onDragOver={e => {
+                      e.preventDefault(); // ドロップを許可するために必須
+                      if (dragOverSongIndex !== index) {
+                        setDragOverSongIndex(index);
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverSongIndex === index) {
+                        setDragOverSongIndex(null);
+                      }
+                    }}
+                    onDrop={e => {
+                      e.preventDefault();
+                      handleDropSong(index);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedSongIndex(null);
+                      setDragOverSongIndex(null);
+                    }}
+                    onClick={() => handleSelectSong(song)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '8px',
+                      marginBottom: 4,
+                      borderRadius: 6,
+                      cursor: isDragging ? 'grabbing' : 'grab',
+                      background: isSelected ? 'rgba(78, 167, 230, 0.12)' : '#181822',
+                      border: isSelected ? '1px solid #8abfdb' : '1px solid transparent',
+                      // ドラッグ中の要素は半透明化
+                      opacity: isDragging ? 0.35 : 1.0,
+                      // ★ borderTop をやめ、boxShadow で上部に青いインジケーター線を描画
+                      boxShadow: isDragOver ? '0 -3px 0 0 #cbd9eb' : 'none',
+                      transition: 'opacity 0.15s',
+                      userSelect: 'none'
+                    }}
                   >
-                    ✕
-                  </button>
-                </div>
-              ))}
+                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: isSelected ? 'bold' : 'normal',
+                          whiteSpace: 'nowrap',
+                          textOverflow: 'ellipsis',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        {song.fileName.replace(/\.midi?$/i, '')}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#8FA4C4', marginTop: 2 }}>
+                        {formatTime(song.durationMs)} {song.bgmFileName && '• BGM付'}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleDeleteSong(song);
+                      }}
+                      title="楽曲を削除"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#666',
+                        cursor: 'pointer',
+                        padding: 4,
+                        fontSize: 12
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.color = '#FF4444')}
+                      onMouseLeave={e => (e.currentTarget.style.color = '#666')}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
             </div>
 
             {/* 上下ドラッグリサイズ用スプリッター境界線 */}
