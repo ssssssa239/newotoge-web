@@ -1004,16 +1004,16 @@ export function App() {
         </div>
 
         {/* タブ切り替え */}
-        <div style={{ background: '#1C2742', borderRadius: 6, padding: 2, display: 'flex' }}>
+        <div style={{ background: '#1e2844', borderRadius: 6, padding: 2, display: 'flex' }}>
           <button
             onClick={() => setSelectedTab('visualizer')}
-            style={{ padding: '4px 10px', background: selectedTab === 'visualizer' ? '#A4D3FF' : 'transparent', color: selectedTab === 'visualizer' ? '#101F33' : '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
+            style={{ padding: '4px 10px', background: selectedTab === 'visualizer' ? '#5D7FAF' : 'transparent', color: selectedTab === 'visualizer' ? '#E2EFFF' : '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
           >
             Visualizer
           </button>
           <button
             onClick={() => setSelectedTab('settings')}
-            style={{ padding: '4px 10px', background: selectedTab === 'settings' ? '#A4D3FF' : 'transparent', color: selectedTab === 'settings' ? '#101F33' : '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
+            style={{ padding: '4px 10px', background: selectedTab === 'settings' ? '#5D7FAF' : 'transparent', color: selectedTab === 'settings' ? '#E2EFFF' : '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
           >
             Track Settings
           </button>
@@ -1413,15 +1413,15 @@ export function App() {
                     />
                     <button
                       onClick={() => MidiDeviceManager.getInstance().testSingleNote(currentEndpoint, 0, testPitch)}
-                      style={{ fontSize: 11, background: '#A4D3FF', border: 'none', padding: '1px 8px', borderRadius: 3, cursor: 'pointer', fontWeight: 'bold', color: '#101F33' }}
+                      style={{ fontSize: 11, background: '#5D7FAF', border: 'none', padding: '1px 8px', borderRadius: 3, cursor: 'pointer', fontWeight: 'bold', color: '#E2EFFF' }}
                     >
                       送信
                     </button>
                     <button
                       onClick={() => MidiDeviceManager.getInstance().sendAllNotesOff(currentEndpoint, 0)}
-                      style={{ fontSize: 11, background: '#FF4444', color: '#E2EFFF', border: 'none', padding: '1px 8px', borderRadius: 3, cursor: 'pointer' }}
+                      style={{ fontSize: 11, background: '#7a4699', color: '#E2EFFF', border: 'none', padding: '3px 6px', borderRadius: 3, cursor: 'pointer' }}
                     >
-                      Off
+                      OFF
                     </button>
                   </div>
                 </div>
@@ -1623,7 +1623,7 @@ export function App() {
                                 style={{
                                   width: '100%',
                                   background: '#3D4764',
-                                  color: slot.assignedPreset?.id !== 0 ? '#5D7FAF' : '#E2EFFF',
+                                  color: slot.assignedPreset?.id !== 0 ? '#bab0ff' : '#E2EFFF',
                                   border: '1px solid #4e598c',
                                   borderRadius: 6,
                                   padding: '5px 8px',
