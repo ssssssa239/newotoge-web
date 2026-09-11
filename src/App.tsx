@@ -1623,7 +1623,7 @@ export function App() {
                                 style={{
                                   width: '100%',
                                   background: '#3D4764',
-                                  color: slot.assignedPreset?.id !== 0 ? '#A4D3FF' : '#E2EFFF',
+                                  color: slot.assignedPreset?.id !== 0 ? '#70aae0' : '#E2EFFF',
                                   border: '1px solid #4e598c',
                                   borderRadius: 6,
                                   padding: '5px 8px',

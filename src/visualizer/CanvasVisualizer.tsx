@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { MidiSongData } from '../models/SongModels';
+import { MidiSongData, MidiNote } from '../models/SongModels';
 import { PlaybackEngine } from '../engine/audio/PlaybackEngine';
+
 
 interface Props {
   song: MidiSongData | null;
@@ -61,37 +62,41 @@ interface VisualizerLane {
   totalNoteCount: number;
 }
 
-// レーン情報の算出 (送信先デバイスごとにグループ化し、複数トラックを統合描画)
+// レーン情報の算出 (通常モード: 割り当て済み楽器のみ / 全Ch表示モード: Noneも含めた全貌表示)
 function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): VisualizerLane[] {
   if (!song) return [];
 
+  const grayColor = 'rgba(115, 115, 122, 0.45)';
+
   if (!showAllChannels) {
+    // 【通常モード】楽器が割り当てられている（None ではない）スロットのみを抽出し、同一楽器ごとに統合
     const map = new Map<string, VisualizerLane>();
 
     for (const slot of song.slots) {
+      // 無効化されているスロットはスキップ
       if (!slot.isEnabled) continue;
-
-      // 対象トラックを取得
-      const track = song.tracks?.find(t => t.trackIndex === slot.trackIndex);
-      const noteCount = track ? track.notes.length : (song.channelCaches[slot.selectedChannel]?.noteCount ?? 0);
-      if (noteCount === 0) continue;
 
       const preset = slot.assignedPreset;
       const isAssigned = !!(preset && preset.id !== 0 && preset.mcuName !== 'None');
 
-      // 送信先デバイスごとにグループキーを生成
-      const groupKey = isAssigned
-        ? (preset.endpointId ? `${preset.mcuName}_${preset.endpointId}` : preset.mcuName)
-        : `unassigned_${slot.id}`;
+      // ★ バグ修正1: 送信先が None (未割当) のトラックは通常ビジュアライザーには表示しない
+      if (!isAssigned) continue;
 
+      // 対象トラックを取得してノート数をチェック
+      const track = song.tracks?.find(t => t.trackIndex === slot.trackIndex);
+      const noteCount = track ? track.notes.length : (song.channelCaches[slot.selectedChannel]?.noteCount ?? 0);
+      if (noteCount === 0) continue;
+
+      // 同一ポート/同一MCUごとにグループ化
+      const groupKey = preset.endpointId ? `${preset.mcuName}_${preset.endpointId}` : preset.mcuName;
       const slotColor = slot.customColor || DEFAULT_CHANNEL_COLORS[(slot.trackIndex ?? slot.selectedChannel) % 16];
 
       if (!map.has(groupKey)) {
         map.set(groupKey, {
           id: groupKey,
-          title: isAssigned ? preset.name : (track?.name ?? `Track ${(slot.trackIndex ?? 0) + 1}`),
-          presetId: isAssigned ? preset.id : 0,
-          isAssigned,
+          title: preset.name,
+          presetId: preset.id,
+          isAssigned: true,
           color: slotColor,
           subTracks: [],
           totalNoteCount: 0
@@ -110,28 +115,43 @@ function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): Vi
 
     return Array.from(map.values());
   } else {
-    // デバッグ全表示モード
+    // 【全Ch表示（全トラックデバッグ）モード】
+    // 存在する全トラックを並べる。楽器割当済みは独自色＆楽器名、None はグレー＆「None」表記
     const tracksToDisplay = (song.tracks && song.tracks.length > 0) ? song.tracks : [];
-    return tracksToDisplay.map((tr, idx) => {
-      const slot = song.slots.find(s => s.trackIndex === tr.trackIndex);
-      const isAssigned = !!(slot && slot.assignedPreset && slot.assignedPreset.id !== 0 && slot.assignedPreset.mcuName !== 'None');
-      const color = slot?.customColor || DEFAULT_CHANNEL_COLORS[idx % 16];
 
-      return {
-        id: `tr_${tr.trackIndex}`,
-        title: tr.name,
-        presetId: isAssigned && slot ? slot.assignedPreset.id : 0,
-        isAssigned,
-        color,
-        subTracks: [{
-          channel: tr.notes[0]?.channel ?? 0,
-          trackIndex: tr.trackIndex,
-          color,
-          latencyOffsetMs: slot?.latencyOffsetMs || 0
-        }],
-        totalNoteCount: tr.notes.length
-      };
-    });
+    return tracksToDisplay
+      .filter(tr => tr.notes.length > 0)
+      .map((tr, idx) => {
+        const slot = song.slots.find(s => s.trackIndex === tr.trackIndex);
+        const isAssigned = !!(
+          slot &&
+          slot.isEnabled &&
+          slot.assignedPreset &&
+          slot.assignedPreset.id !== 0 &&
+          slot.assignedPreset.mcuName !== 'None'
+        );
+
+        // ★ バグ修正2: 割当済みなら楽器名と設定色、未割当(None)なら「None」とグレー色を適用
+        const laneTitle = isAssigned && slot ? `${slot.assignedPreset.name} (${tr.name})` : `None (${tr.name})`;
+        const laneColor = isAssigned && slot
+          ? (slot.customColor || DEFAULT_CHANNEL_COLORS[idx % 16])
+          : grayColor;
+
+        return {
+          id: `tr_${tr.trackIndex}`,
+          title: laneTitle,
+          presetId: isAssigned && slot ? slot.assignedPreset.id : 0,
+          isAssigned,
+          color: laneColor,
+          subTracks: [{
+            channel: tr.notes[0]?.channel ?? 0,
+            trackIndex: tr.trackIndex,
+            color: laneColor,
+            latencyOffsetMs: isAssigned && slot ? (slot.latencyOffsetMs || 0) : 0
+          }],
+          totalNoteCount: tr.notes.length
+        };
+      });
   }
 }
 
@@ -265,15 +285,24 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
         // 親チャンネル ＋ サブチャンネルのノーツを同一レーン内に重ねて描画
         for (const st of lane.subTracks) {
-          // 各チャンネルの遅延補正を考慮して描画対象ノーツを抽出
           const offsetMs = st.latencyOffsetMs;
           const effectiveTopMs = topMs - offsetMs;
           const effectiveBottomMs = bottomMs - offsetMs;
 
-          // ★ trackIndex があればトラックから、なければ従来のチャンネルキャッシュから安全に取得
-          let allNotes = (typeof st.trackIndex === 'number' && song.tracks)
-            ? song.tracks.find(t => t.trackIndex === st.trackIndex)?.notes ?? []
-            : (song.channelCaches[st.channel]?.notes ?? []);
+          // ★ 修正: trackIndex を優先し、該当トラックのノーツ「のみ」を厳密に取得
+          let allNotes: MidiNote[] = [];
+          if (typeof st.trackIndex === 'number' && song.tracks) {
+            const targetTrack = song.tracks.find(t => t.trackIndex === st.trackIndex);
+            if (targetTrack) {
+              allNotes = targetTrack.notes;
+            }
+          }
+
+          // トラックが見つからない旧フォーマット（Format 0）の場合のみチャンネルキャッシュを参照
+          if (allNotes.length === 0 && (!song.tracks || song.tracks.length <= 1)) {
+            const cache = song.channelCaches[st.channel];
+            if (cache) allNotes = cache.notes;
+          }
 
           if (allNotes.length === 0) continue;
 
