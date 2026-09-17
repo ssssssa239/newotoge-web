@@ -3,7 +3,7 @@ import { MidiDeviceManager } from './engine/midi/MidiDeviceManager';
 import { PlaybackEngine } from './engine/audio/PlaybackEngine';
 import { MidiParser } from './engine/parser/MidiParser';
 import { StorageManager, SongMetadata } from './storage/StorageManager';
-import { MidiSongData, EnsemblePreset, LaneSlot, MidiTrackInfo } from './models/SongModels';
+import { MidiSongData, EnsemblePreset, LaneSlot, PitchSplitRule, MidiTrackInfo } from './models/SongModels';
 import { UnifiedMidiEndpoint } from './engine/midi/types';
 import { loadRegisteredPresets, registerMcuPreset, deleteRegisteredPreset, InstrumentPreset, NONE_PRESET } from './models/InstrumentPreset';
 import { CanvasVisualizer } from './visualizer/CanvasVisualizer';
@@ -18,6 +18,14 @@ const DEFAULT_CHANNEL_COLORS = [
   '#FF6B81', '#1DD1A1', '#F368E0', '#54A0FF',
   '#5F27CD', '#C8D6E5', '#FF9F43', '#10AC84'
 ];
+
+// ヤマハ方式（60 = C3）音名ラベル変換ヘルパー
+export function getPitchLabel(pitch: number): string {
+  const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const noteName = noteNames[pitch % 12];
+  const octave = Math.floor(pitch / 12) - 2; // 60 / 12 - 2 = 3 (C3)
+  return `${noteName}${octave} (#${pitch})`;
+}
 
 export function App() {
   const [songs, setSongs] = useState<MidiSongData[]>([]);
@@ -1789,6 +1797,171 @@ export function App() {
                       })}
                     </div>
                   )}
+                  {/* ★★★★★ ここから差し込む ★★★★★ */}
+                  {/* --------------------- 区切り線 --------------------- */}
+                  <div style={{ height: 1, background: '#3E4663', margin: '4px 0' }} />
+
+                  {/* Ch分割 (音域スプリット) セクション */}
+                  {(() => {
+                    const pitches = track.notes.map(n => n.pitch);
+                    const minTrackPitch = pitches.length > 0 ? Math.min(...pitches) : 0;
+                    const maxTrackPitch = pitches.length > 0 ? Math.max(...pitches) : 127;
+                    const isSplitActive = !!slot.isPitchSplitEnabled;
+                    const rules = slot.pitchSplitRules || [];
+
+                    // 選択肢用の音高配列（トラックの最低音〜最高音のみ）
+                    const availablePitches: number[] = [];
+                    for (let p = minTrackPitch; p <= maxTrackPitch; p++) {
+                      availablePitches.push(p);
+                    }
+
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 12, fontWeight: 'bold', color: '#E2EFFF' }}>
+                            Ch分割 (音域スプリット)
+                          </span>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, color: '#A4D3FF' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSplitActive}
+                              onChange={e => {
+                                const enabled = e.target.checked;
+                                let newRules = slot.pitchSplitRules;
+                                if (enabled && (!newRules || newRules.length === 0)) {
+                                  const mid = Math.floor((minTrackPitch + maxTrackPitch) / 2);
+                                  newRules = [
+                                    { id: crypto.randomUUID(), minPitch: minTrackPitch, maxPitch: mid, outputChannel: 1, color: '#00D2D3' },
+                                    { id: crypto.randomUUID(), minPitch: mid + 1, maxPitch: maxTrackPitch, outputChannel: 0, color: '#FF4D4D' }
+                                  ];
+                                }
+                                handleUpdateSlot(slot.id, { isPitchSplitEnabled: enabled, pitchSplitRules: newRules }, track);
+                              }}
+                            />
+                            有効
+                          </label>
+                        </div>
+
+                        {isSplitActive && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ fontSize: 10, color: '#8FA4C4' }}>
+                              トラック音域: {getPitchLabel(minTrackPitch)} 〜 {getPitchLabel(maxTrackPitch)}
+                            </div>
+
+                            {rules.map((rule, rIdx) => (
+                              <div
+                                key={rule.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  background: '#22273D',
+                                  padding: '6px 8px',
+                                  borderRadius: 6,
+                                  border: '1px solid #363E5E'
+                                }}
+                              >
+                                <select
+                                  value={rule.minPitch}
+                                  onChange={e => {
+                                    const val = Number(e.target.value);
+                                    const updated = [...rules];
+                                    updated[rIdx] = { ...rule, minPitch: val, maxPitch: Math.max(val, rule.maxPitch) };
+                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                                  }}
+                                  style={{ background: '#1A1E2E', color: '#E2EFFF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 4px' }}
+                                >
+                                  {availablePitches.map(p => (
+                                    <option key={p} value={p}>{getPitchLabel(p)}</option>
+                                  ))}
+                                </select>
+
+                                <span style={{ fontSize: 10, color: '#8FA4C4' }}>〜</span>
+
+                                <select
+                                  value={rule.maxPitch}
+                                  onChange={e => {
+                                    const val = Number(e.target.value);
+                                    const updated = [...rules];
+                                    updated[rIdx] = { ...rule, maxPitch: val, minPitch: Math.min(val, rule.minPitch) };
+                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                                  }}
+                                  style={{ background: '#1A1E2E', color: '#E2EFFF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 4px' }}
+                                >
+                                  {availablePitches.map(p => (
+                                    <option key={p} value={p}>{getPitchLabel(p)}</option>
+                                  ))}
+                                </select>
+
+                                <select
+                                  value={rule.outputChannel}
+                                  onChange={e => {
+                                    const updated = [...rules];
+                                    updated[rIdx] = { ...rule, outputChannel: Number(e.target.value) };
+                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                                  }}
+                                  style={{ background: '#1A1E2E', color: '#A4D3FF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 4px' }}
+                                >
+                                  {Array.from({ length: 16 }, (_, i) => (
+                                    <option key={i} value={i}>Ch {i + 1}</option>
+                                  ))}
+                                </select>
+
+                                <input
+                                  type="color"
+                                  value={rule.color}
+                                  onChange={e => {
+                                    const updated = [...rules];
+                                    updated[rIdx] = { ...rule, color: e.target.value };
+                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                                  }}
+                                  style={{ width: 22, height: 20, padding: 0, border: '1px solid #575B77', borderRadius: 4, cursor: 'pointer', background: 'transparent' }}
+                                />
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = rules.filter((_, idx) => idx !== rIdx);
+                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                                  }}
+                                  style={{ background: 'transparent', border: 'none', color: '#FF6B81', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ))}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newRule: PitchSplitRule = {
+                                  id: crypto.randomUUID(),
+                                  minPitch: minTrackPitch,
+                                  maxPitch: maxTrackPitch,
+                                  outputChannel: (rules.length % 16),
+                                  color: DEFAULT_CHANNEL_COLORS[rules.length % 16]
+                                };
+                                handleUpdateSlot(slot.id, { pitchSplitRules: [...rules, newRule] }, track);
+                              }}
+                              style={{
+                                padding: '4px 8px',
+                                background: '#243B54',
+                                border: '1px dashed #36485E',
+                                borderRadius: 5,
+                                color: '#A4D3FF',
+                                fontSize: 10,
+                                cursor: 'pointer',
+                                textAlign: 'center'
+                              }}
+                            >
+                              ＋ 音域ルールを追加
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {/* ★★★★★ ここまで差し込む ★★★★★ */}
                 </div>
               );
             })()}

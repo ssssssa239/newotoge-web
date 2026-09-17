@@ -1,5 +1,14 @@
 import { InstrumentPreset } from './InstrumentPreset';
 
+// ★ 追加: 音域分割ルールの型定義
+export interface PitchSplitRule {
+  id: string;
+  minPitch: number;      // 下限ノート番号
+  maxPitch: number;      // 上限ノート番号
+  outputChannel: number; // 割り当て送信Ch (0〜15)
+  color: string;         // ノーツ描画色
+}
+
 export interface LaneSlot {
   id: string;
   isEnabled: boolean;
@@ -11,6 +20,9 @@ export interface LaneSlot {
   customColor?: string;
   parentId?: string;            // 親スロットのID（子レーンのみ指定）
   channelColors?: Record<number, string>;
+  // ★ 追加: 音域分割用プロパティ
+  isPitchSplitEnabled?: boolean;
+  pitchSplitRules?: PitchSplitRule[];
 }
 
 export interface EnsemblePreset {

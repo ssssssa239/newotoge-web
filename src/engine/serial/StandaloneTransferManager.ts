@@ -1,4 +1,5 @@
-import { MidiTrackInfo } from '../../models/SongModels';
+// StandaloneTransferManager.ts の上部インポート
+import { MidiTrackInfo, LaneSlot, PitchSplitRule } from '../../models/SongModels'; // ★ LaneSlot, PitchSplitRule を追加
 
 export interface TransferProgress {
   sent: number;
@@ -14,20 +15,23 @@ export class StandaloneTransferManager {
    */
   public static compileTrackData(
     track: MidiTrackInfo,
-    outputChannel: number
+    outputChannel: number,
+    slot?: LaneSlot // ★ slot を受け取る
   ): { data: Uint8Array; totalEvents: number } {
-    const rawEvents: Array<{
-      timeMs: number;
-      status: number;
-      pitch: number;
-      velocity: number;
-    }> = [];
+    const rawEvents: Array<{ timeMs: number; status: number; pitch: number; velocity: number }> = [];
 
-    // ★ 全ノートを対象にする
     for (const note of track.notes) {
-      const ch = (outputChannel >= 0)
-        ? (outputChannel & 0x0F)
-        : (note.channel & 0x0F);
+      let ch: number;
+
+      // 音域分割ルールを判定
+      if (slot?.isPitchSplitEnabled && slot.pitchSplitRules && slot.pitchSplitRules.length > 0) {
+        const matched = slot.pitchSplitRules.find(r => note.pitch >= r.minPitch && note.pitch <= r.maxPitch);
+        ch = matched ? matched.outputChannel : (note.channel & 0x0F);
+      } else if (outputChannel >= 0) {
+        ch = outputChannel & 0x0F;
+      } else {
+        ch = note.channel & 0x0F;
+      }
 
       rawEvents.push({
         timeMs: note.startTimeMs,
@@ -42,6 +46,7 @@ export class StandaloneTransferManager {
         velocity: 0
       });
     }
+    // ...
 
     rawEvents.sort((a, b) => {
       if (a.timeMs !== b.timeMs) return a.timeMs - b.timeMs;

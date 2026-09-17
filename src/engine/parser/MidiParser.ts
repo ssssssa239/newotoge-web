@@ -387,16 +387,8 @@ export class MidiParser {
       .sort((a, b) => a - b);
 
     // ★ Format 0 (単一トラックに複数Ch混在) の場合はチャンネルごとに仮想トラックを生成
-    let finalTracks = parsedTracks.filter(t => t.notes.length > 0);
-    if (finalTracks.length <= 1 && usedChannels.length > 1) {
-      finalTracks = usedChannels.map((ch, idx) => ({
-        id: idx,
-        trackIndex: idx,
-        name: `Ch ${ch + 1}`,
-        channel: ch,
-        notes: channelBuckets[ch]
-      }));
-    }
+    // ★ 修正後: 勝手にチャンネルごとにトラックを分解せず、DAW本来のトラック構成を維持する
+    const finalTracks = parsedTracks.filter(t => t.notes.length > 0);
 
     // トラック起点で初期スロットを生成
     const defaultSlots: LaneSlot[] = finalTracks.map((tr, idx) => {
@@ -412,6 +404,15 @@ export class MidiParser {
         customColor: DEFAULT_CHANNEL_COLORS[idx % 16]
       };
     });
+
+    // ★ ここに一時的に追加
+    console.log('====== MIDI解析チェック ======');
+    console.log(`トラック総数: ${finalTracks.length}`);
+    finalTracks.forEach((t, i) => {
+      const channels = Array.from(new Set(t.notes.map(n => n.channel))).map(c => `Ch ${c + 1}`);
+      console.log(`[トラック ${i + 1}] 名前: "${t.name}" | ノート数: ${t.notes.length} | 検出Ch:`, channels);
+    });
+    console.log('==============================');
 
     return {
       id,

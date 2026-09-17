@@ -380,10 +380,19 @@ export class PlaybackEngine {
 
       // スロットに紐づくノートをスケジュールに追加
       for (const note of notesToSchedule) {
-        // 送信Chが 0〜15 指定ならそのチャンネル、-1（元のCh維持）ならノート固有の channel
-        const targetChannel = (typeof slot.outputChannel === 'number' && slot.outputChannel >= 0)
-          ? (slot.outputChannel & 0x0f)
-          : (note.channel & 0x0f);
+        let targetChannel: number;
+
+        // ★ 音域分割が有効な場合はピッチ合致ルールを優先
+        if (slot.isPitchSplitEnabled && slot.pitchSplitRules && slot.pitchSplitRules.length > 0) {
+          const matchedRule = slot.pitchSplitRules.find(
+            r => note.pitch >= r.minPitch && note.pitch <= r.maxPitch
+          );
+          targetChannel = matchedRule ? matchedRule.outputChannel : (note.channel & 0x0f);
+        } else if (typeof slot.outputChannel === 'number' && slot.outputChannel >= 0) {
+          targetChannel = slot.outputChannel & 0x0f;
+        } else {
+          targetChannel = note.channel & 0x0f;
+        }
 
         const adjustedOn = note.startTimeMs + slot.latencyOffsetMs;
         const adjustedOff = note.endTimeMs + slot.latencyOffsetMs;
@@ -392,7 +401,7 @@ export class PlaybackEngine {
           adjustedOnTimeMs: adjustedOn,
           adjustedOffTimeMs: adjustedOff,
           channel: targetChannel,
-          endpointId: slot.assignedPreset?.endpointId, // ★ ここを書き換え
+          endpointId: slot.assignedPreset?.endpointId,
           pitch: note.pitch,
           velocity: note.velocity || 100
         });

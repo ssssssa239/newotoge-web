@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useMemo } from 'react';
-import { MidiSongData, MidiNote } from '../models/SongModels';
+import { MidiSongData, MidiNote, PitchSplitRule } from '../models/SongModels'; // ★ PitchSplitRule を追加
 import { PlaybackEngine } from '../engine/audio/PlaybackEngine';
 
 interface Props {
@@ -49,7 +49,9 @@ interface VisualizerSubTrack {
   trackIndex?: number;
   color: string;
   latencyOffsetMs: number;
-  channelColors?: Record<number, string>; // ★ 追加
+  channelColors?: Record<number, string>;
+  isPitchSplitEnabled?: boolean;     // ★ 追加
+  pitchSplitRules?: PitchSplitRule[]; // ★ 追加
 }
 
 interface VisualizerLane {
@@ -110,7 +112,9 @@ function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): Vi
         trackIndex: slot.trackIndex,
         color: slotColor,
         latencyOffsetMs: slot.latencyOffsetMs || 0,
-        channelColors: slot.channelColors // ★ 追加
+        channelColors: slot.channelColors,
+        isPitchSplitEnabled: slot.isPitchSplitEnabled,     // ★ 追加
+        pitchSplitRules: slot.pitchSplitRules             // ★ 追加
       });
       lane.totalNoteCount += targetNotes.length;
     }
@@ -326,14 +330,22 @@ export const CanvasVisualizer: React.FC<Props> = ({
           const hitLuminescentColor = getHitLuminescentColor(st.color);
 
           for (const note of visibleNotes) {
-            // ★ チャンネル別カラーが設定されていればそれを優先、なければ基本色またはデフォルト色
-            const noteColor = (st.channelColors && st.channelColors[note.channel])
-              ? st.channelColors[note.channel]
-              : (st.channel === -1 || st.channel === undefined)
-                ? DEFAULT_CHANNEL_COLORS[note.channel % 16]
-                : st.color;
+            let noteColor = st.color;
+
+            // ★ 音域分割ルールが有効な場合はピッチ合致ルールの色を最優先
+            if (st.isPitchSplitEnabled && st.pitchSplitRules && st.pitchSplitRules.length > 0) {
+              const matched = st.pitchSplitRules.find(r => note.pitch >= r.minPitch && note.pitch <= r.maxPitch);
+              if (matched) {
+                noteColor = matched.color;
+              }
+            } else if (st.channelColors && st.channelColors[note.channel]) {
+              noteColor = st.channelColors[note.channel];
+            } else if (st.channel === -1 || st.channel === undefined) {
+              noteColor = DEFAULT_CHANNEL_COLORS[note.channel % 16];
+            }
 
             const hitLuminescentColor = getHitLuminescentColor(noteColor);
+            // ...以降の描画処理
 
             const noteStartWithOffset = note.startTimeMs + offsetMs;
             const noteEndWithOffset = note.endTimeMs + offsetMs;
