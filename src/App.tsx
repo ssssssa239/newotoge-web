@@ -1703,7 +1703,7 @@ export function App() {
                     position: 'absolute',
                     top: '110%',
                     left: 0,
-                    width: 260,
+                    width: 300,
                     background: '#1A1E2E',
                     border: '1px solid #DCB28A',
                     borderRadius: 8,
@@ -1924,7 +1924,7 @@ export function App() {
                                     const updated = rules.filter((_, idx) => idx !== rIdx);
                                     handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
                                   }}
-                                  style={{ background: 'transparent', border: 'none', color: '#FF6B81', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                                  style={{ marginLeft: 'auto',background: 'transparent', border: 'none', color: '#FF6B81', cursor: 'pointer', fontSize: 12, padding: 0 }}
                                 >
                                   ✕
                                 </button>
