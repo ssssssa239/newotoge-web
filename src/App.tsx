@@ -1769,87 +1769,124 @@ export function App() {
               />
             )}
 
-            {/* ★★★ Chごとのノーツカラー設定ドロップダウンメニュー ★★★ */}
+            {/* ③ ポップアップウィンドウ本体 */}
             {activeChannelMenuSlotId === slot.id && (() => {
               const isAuto = (slot.outputChannel ?? -1) === -1;
               const channelsInTrack = Array.from(new Set(track.notes.map(n => n.channel))).sort((a, b) => a - b);
+              const pitches = track.notes.map(n => n.pitch);
+              const minTrackPitch = pitches.length > 0 ? Math.min(...pitches) : 0;
+              const maxTrackPitch = pitches.length > 0 ? Math.max(...pitches) : 127;
+              const isSplitActive = !!slot.isPitchSplitEnabled;
+              const rules = slot.pitchSplitRules || [];
+
+              const availablePitches: number[] = [];
+              for (let p = minTrackPitch; p <= maxTrackPitch; p++) {
+                availablePitches.push(p);
+              }
 
               return (
                 <div
                   style={{
                     position: 'absolute',
-                    top: '110%',
+                    top: 'calc(100% + 6px)',
                     left: 0,
-                    width: 300,
+                    width: 320,
                     background: '#1A1E2E',
                     border: '1px solid #DCB28A',
                     borderRadius: 8,
                     padding: '12px 14px',
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-                    zIndex: 80,
+                    boxShadow: '0 10px 28px rgba(0,0,0,0.85)',
+                    zIndex: 1000,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 10
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 12, fontWeight: 'bold', color: '#E2EFFF' }}>
-                      Chごとのノーツカラー設定
-                    </span>
+                  {/* ★★★ 最上部：大メニューヘッダー ★★★ */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      borderBottom: '1px solid #2F3752',
+                      paddingBottom: 8
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 'bold', color: '#FFFFFF' }}>
+                        高度な機能
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          background: '#242B42',
+                          color: '#8FA4C4',
+                          padding: '1px 5px',
+                          borderRadius: 4,
+                          border: '1px solid #3E4663'
+                        }}
+                      >
+                        beta版
+                      </span>
+                    </div>
                     <button
                       type="button"
                       onClick={() => setActiveChannelMenuSlotId(null)}
-                      style={{ background: 'transparent', border: 'none', color: '#8FA4C4', cursor: 'pointer', fontSize: 12 }}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#8FA4C4',
+                        cursor: 'pointer',
+                        fontSize: 13,
+                        padding: 0
+                      }}
                     >
                       ✕
                     </button>
                   </div>
 
-                  {!isAuto ? (
-                    /* Auto 以外の時（単一Ch固定送信時）の案内表示 */
-                    <div style={{ padding: '8px 10px', background: '#25212B', border: '1px solid #4D3B47', borderRadius: 6 }}>
-                      <div style={{ fontSize: 11, fontWeight: 'bold', color: '#FFA07A', marginBottom: 4 }}>
-                        ⚠️ 単一のChを送信する設定になっています
-                      </div>
-                      <div style={{ fontSize: 10, color: '#A09BB0', lineHeight: 1.4 }}>
-                        送信Chを「Auto」に切り替えると、トラックに含まれる複数のChごとに色分けしてビジュアライザーに描画できます。
-                      </div>
-                    </div>
-                  ) : channelsInTrack.length <= 1 ? (
-                    /* Auto だが単一Chしか含まれていない場合 */
-                    <div style={{ fontSize: 11, color: '#8FA4C4', padding: '6px 0' }}>
-                      このトラックには Ch {channelsInTrack[0] !== undefined ? channelsInTrack[0] + 1 : 1} のみ含まれています。
-                    </div>
-                  ) : (
-                    /* Auto かつ複数Chが含まれている場合の色設定パレット */
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div style={{ fontSize: 10, color: '#8FA4C4' }}>
-                        各チャンネルのノーツカラーを個別に指定できます：
-                      </div>
+                  {/* セクション1：Chごとのノーツカラー設定 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 'bold', color: '#A4D3FF' }}>
+                      ■ Chごとのノーツカラー
+                    </span>
 
-                      {channelsInTrack.map(ch => {
-                        const activeColor = slot.channelColors?.[ch] || DEFAULT_CHANNEL_COLORS[ch % 16];
-                        return (
-                          <div
-                            key={ch}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              padding: '4px 6px',
-                              background: '#22273D',
-                              borderRadius: 5
-                            }}
-                          >
-                            <span style={{ fontSize: 11, fontWeight: 'bold', color: '#E2EFFF' }}>
-                              Ch {ch + 1}
-                              <span style={{ fontSize: 9, color: '#8FA4C4', marginLeft: 4, fontWeight: 'normal' }}>
-                                ({track.notes.filter(n => n.channel === ch).length} notes)
+                    {!isAuto ? (
+                      <div style={{ padding: '6px 8px', background: '#25212B', border: '1px solid #4D3B47', borderRadius: 5 }}>
+                        <div style={{ fontSize: 10, fontWeight: 'bold', color: '#FFA07A', marginBottom: 2 }}>
+                          ⚠️ 単一Ch送信モード
+                        </div>
+                        <div style={{ fontSize: 9, color: '#A09BB0', lineHeight: 1.3 }}>
+                          送信Chが「Auto」のときに個別色分けが有効になります。
+                        </div>
+                      </div>
+                    ) : channelsInTrack.length <= 1 ? (
+                      <div style={{ fontSize: 10, color: '#8FA4C4', padding: '2px 0' }}>
+                        このトラックには Ch {(channelsInTrack[0] ?? 0) + 1} のみ含まれています。
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {channelsInTrack.map(ch => {
+                          const activeColor = slot.channelColors?.[ch] || DEFAULT_CHANNEL_COLORS[ch % 16];
+                          return (
+                            <div
+                              key={ch}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '3px 6px',
+                                background: '#22273D',
+                                borderRadius: 4
+                              }}
+                            >
+                              <span style={{ fontSize: 10, fontWeight: 'bold', color: '#E2EFFF' }}>
+                                Ch {ch + 1}
+                                <span style={{ fontSize: 9, color: '#8FA4C4', marginLeft: 4, fontWeight: 'normal' }}>
+                                  ({track.notes.filter(n => n.channel === ch).length} notes)
+                                </span>
                               </span>
-                            </span>
 
-                            {/* カラーピッカー */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               <input
                                 type="color"
                                 value={activeColor}
@@ -1859,186 +1896,177 @@ export function App() {
                                   handleUpdateSlot(slot.id, { channelColors: updatedColors }, track);
                                 }}
                                 style={{
-                                  width: 28,
-                                  height: 22,
+                                  width: 24,
+                                  height: 18,
                                   padding: 0,
                                   border: '1px solid #575B77',
-                                  borderRadius: 4,
+                                  borderRadius: 3,
                                   cursor: 'pointer',
                                   background: 'transparent'
                                 }}
                               />
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {/* ★★★★★ ここから差し込む ★★★★★ */}
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
                   {/* --------------------- 区切り線 --------------------- */}
-                  <div style={{ height: 1, background: '#3E4663', margin: '4px 0' }} />
+                  <div style={{ height: 1, background: '#2F3752', margin: '2px 0' }} />
 
-                  {/* Ch分割 (音域スプリット) セクション */}
-                  {(() => {
-                    const pitches = track.notes.map(n => n.pitch);
-                    const minTrackPitch = pitches.length > 0 ? Math.min(...pitches) : 0;
-                    const maxTrackPitch = pitches.length > 0 ? Math.max(...pitches) : 127;
-                    const isSplitActive = !!slot.isPitchSplitEnabled;
-                    const rules = slot.pitchSplitRules || [];
+                  {/* セクション2：Ch分割 (音域スプリット) */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 11, fontWeight: 'bold', color: '#A4D3FF' }}>
+                        ■ Ch分割 (音域スプリット)
+                      </span>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 10, color: '#E2EFFF' }}>
+                        <input
+                          type="checkbox"
+                          checked={isSplitActive}
+                          onChange={e => {
+                            const enabled = e.target.checked;
+                            let newRules = slot.pitchSplitRules;
+                            if (enabled && (!newRules || newRules.length === 0)) {
+                              const mid = Math.floor((minTrackPitch + maxTrackPitch) / 2);
+                              newRules = [
+                                { id: crypto.randomUUID(), minPitch: minTrackPitch, maxPitch: mid, outputChannel: 1, color: '#00D2D3' },
+                                { id: crypto.randomUUID(), minPitch: mid + 1, maxPitch: maxTrackPitch, outputChannel: 0, color: '#FF4D4D' }
+                              ];
+                            }
+                            handleUpdateSlot(slot.id, { isPitchSplitEnabled: enabled, pitchSplitRules: newRules }, track);
+                          }}
+                        />
+                        有効化
+                      </label>
+                    </div>
 
-                    // 選択肢用の音高配列（トラックの最低音〜最高音のみ）
-                    const availablePitches: number[] = [];
-                    for (let p = minTrackPitch; p <= maxTrackPitch; p++) {
-                      availablePitches.push(p);
-                    }
-
-                    return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <span style={{ fontSize: 12, fontWeight: 'bold', color: '#E2EFFF' }}>
-                            Ch分割 (音域スプリット)
-                          </span>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, color: '#A4D3FF' }}>
-                            <input
-                              type="checkbox"
-                              checked={isSplitActive}
-                              onChange={e => {
-                                const enabled = e.target.checked;
-                                let newRules = slot.pitchSplitRules;
-                                if (enabled && (!newRules || newRules.length === 0)) {
-                                  const mid = Math.floor((minTrackPitch + maxTrackPitch) / 2);
-                                  newRules = [
-                                    { id: crypto.randomUUID(), minPitch: minTrackPitch, maxPitch: mid, outputChannel: 1, color: '#00D2D3' },
-                                    { id: crypto.randomUUID(), minPitch: mid + 1, maxPitch: maxTrackPitch, outputChannel: 0, color: '#FF4D4D' }
-                                  ];
-                                }
-                                handleUpdateSlot(slot.id, { isPitchSplitEnabled: enabled, pitchSplitRules: newRules }, track);
-                              }}
-                            />
-                            有効
-                          </label>
+                    {isSplitActive && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div style={{ fontSize: 9, color: '#8FA4C4' }}>
+                          音域範囲: {getPitchLabel(minTrackPitch)} 〜 {getPitchLabel(maxTrackPitch)}
                         </div>
 
-                        {isSplitActive && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                            <div style={{ fontSize: 10, color: '#8FA4C4' }}>
-                              トラック音域: {getPitchLabel(minTrackPitch)} 〜 {getPitchLabel(maxTrackPitch)}
-                            </div>
+                        {rules.map((rule, rIdx) => (
+                          <div
+                            key={rule.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: '#22273D',
+                              padding: '5px 6px',
+                              borderRadius: 5,
+                              border: '1px solid #363E5E'
+                            }}
+                          >
+                            <select
+                              value={rule.minPitch}
+                              onChange={e => {
+                                const val = Number(e.target.value);
+                                const updated = [...rules];
+                                updated[rIdx] = { ...rule, minPitch: val, maxPitch: Math.max(val, rule.maxPitch) };
+                                handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                              }}
+                              style={{ background: '#1A1E2E', color: '#E2EFFF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 3px' }}
+                            >
+                              {availablePitches.map(p => (
+                                <option key={p} value={p}>{getPitchLabel(p)}</option>
+                              ))}
+                            </select>
 
-                            {rules.map((rule, rIdx) => (
-                              <div
-                                key={rule.id}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 6,
-                                  background: '#22273D',
-                                  padding: '6px 8px',
-                                  borderRadius: 6,
-                                  border: '1px solid #363E5E'
-                                }}
-                              >
-                                <select
-                                  value={rule.minPitch}
-                                  onChange={e => {
-                                    const val = Number(e.target.value);
-                                    const updated = [...rules];
-                                    updated[rIdx] = { ...rule, minPitch: val, maxPitch: Math.max(val, rule.maxPitch) };
-                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
-                                  }}
-                                  style={{ background: '#1A1E2E', color: '#E2EFFF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 4px' }}
-                                >
-                                  {availablePitches.map(p => (
-                                    <option key={p} value={p}>{getPitchLabel(p)}</option>
-                                  ))}
-                                </select>
+                            <span style={{ fontSize: 9, color: '#8FA4C4' }}>〜</span>
 
-                                <span style={{ fontSize: 10, color: '#8FA4C4' }}>〜</span>
+                            <select
+                              value={rule.maxPitch}
+                              onChange={e => {
+                                const val = Number(e.target.value);
+                                const updated = [...rules];
+                                updated[rIdx] = { ...rule, maxPitch: val, minPitch: Math.min(val, rule.minPitch) };
+                                handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                              }}
+                              style={{ background: '#1A1E2E', color: '#E2EFFF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 3px' }}
+                            >
+                              {availablePitches.map(p => (
+                                <option key={p} value={p}>{getPitchLabel(p)}</option>
+                              ))}
+                            </select>
 
-                                <select
-                                  value={rule.maxPitch}
-                                  onChange={e => {
-                                    const val = Number(e.target.value);
-                                    const updated = [...rules];
-                                    updated[rIdx] = { ...rule, maxPitch: val, minPitch: Math.min(val, rule.minPitch) };
-                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
-                                  }}
-                                  style={{ background: '#1A1E2E', color: '#E2EFFF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 4px' }}
-                                >
-                                  {availablePitches.map(p => (
-                                    <option key={p} value={p}>{getPitchLabel(p)}</option>
-                                  ))}
-                                </select>
+                            <select
+                              value={rule.outputChannel}
+                              onChange={e => {
+                                const updated = [...rules];
+                                updated[rIdx] = { ...rule, outputChannel: Number(e.target.value) };
+                                handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                              }}
+                              style={{ background: '#1A1E2E', color: '#A4D3FF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 3px' }}
+                            >
+                              {Array.from({ length: 16 }, (_, i) => (
+                                <option key={i} value={i}>Ch {i + 1}</option>
+                              ))}
+                            </select>
 
-                                <select
-                                  value={rule.outputChannel}
-                                  onChange={e => {
-                                    const updated = [...rules];
-                                    updated[rIdx] = { ...rule, outputChannel: Number(e.target.value) };
-                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
-                                  }}
-                                  style={{ background: '#1A1E2E', color: '#A4D3FF', border: '1px solid #4E598C', borderRadius: 4, fontSize: 10, padding: '2px 4px' }}
-                                >
-                                  {Array.from({ length: 16 }, (_, i) => (
-                                    <option key={i} value={i}>Ch {i + 1}</option>
-                                  ))}
-                                </select>
-
-                                <input
-                                  type="color"
-                                  value={rule.color}
-                                  onChange={e => {
-                                    const updated = [...rules];
-                                    updated[rIdx] = { ...rule, color: e.target.value };
-                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
-                                  }}
-                                  style={{ width: 22, height: 20, padding: 0, border: '1px solid #575B77', borderRadius: 4, cursor: 'pointer', background: 'transparent' }}
-                                />
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const updated = rules.filter((_, idx) => idx !== rIdx);
-                                    handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
-                                  }}
-                                  style={{ marginLeft: 'auto',background: 'transparent', border: 'none', color: '#FF6B81', cursor: 'pointer', fontSize: 12, padding: 0 }}
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ))}
+                            <input
+                              type="color"
+                              value={rule.color}
+                              onChange={e => {
+                                const updated = [...rules];
+                                updated[rIdx] = { ...rule, color: e.target.value };
+                                handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
+                              }}
+                              style={{ width: 20, height: 18, padding: 0, border: '1px solid #575B77', borderRadius: 3, cursor: 'pointer', background: 'transparent' }}
+                            />
 
                             <button
                               type="button"
                               onClick={() => {
-                                const newRule: PitchSplitRule = {
-                                  id: crypto.randomUUID(),
-                                  minPitch: minTrackPitch,
-                                  maxPitch: maxTrackPitch,
-                                  outputChannel: (rules.length % 16),
-                                  color: DEFAULT_CHANNEL_COLORS[rules.length % 16]
-                                };
-                                handleUpdateSlot(slot.id, { pitchSplitRules: [...rules, newRule] }, track);
+                                const updated = rules.filter((_, idx) => idx !== rIdx);
+                                handleUpdateSlot(slot.id, { pitchSplitRules: updated }, track);
                               }}
                               style={{
-                                padding: '4px 8px',
-                                background: '#243B54',
-                                border: '1px dashed #36485E',
-                                borderRadius: 5,
-                                color: '#A4D3FF',
-                                fontSize: 10,
+                                marginLeft: 'auto',
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#FF6B81',
                                 cursor: 'pointer',
-                                textAlign: 'center'
+                                fontSize: 11,
+                                padding: '0 2px'
                               }}
                             >
-                              ＋ 音域ルールを追加
+                              ✕
                             </button>
                           </div>
-                        )}
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newRule: PitchSplitRule = {
+                              id: crypto.randomUUID(),
+                              minPitch: minTrackPitch,
+                              maxPitch: maxTrackPitch,
+                              outputChannel: (rules.length % 16),
+                              color: DEFAULT_CHANNEL_COLORS[rules.length % 16]
+                            };
+                            handleUpdateSlot(slot.id, { pitchSplitRules: [...rules, newRule] }, track);
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            background: '#243B54',
+                            border: '1px dashed #36485E',
+                            borderRadius: 4,
+                            color: '#A4D3FF',
+                            fontSize: 10,
+                            cursor: 'pointer',
+                            textAlign: 'center'
+                          }}
+                        >
+                          ＋ 音域ルールを追加
+                        </button>
                       </div>
-                    );
-                  })()}
-                  {/* ★★★★★ ここまで差し込む ★★★★★ */}
+                    )}
+                  </div>
                 </div>
               );
             })()}

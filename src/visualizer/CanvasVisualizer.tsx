@@ -111,7 +111,7 @@ function getRenderLanes(song: MidiSongData | null, showAllChannels: boolean): Vi
         channel: slot.selectedChannel,
         trackIndex: slot.trackIndex,
         color: slotColor,
-        latencyOffsetMs: slot.latencyOffsetMs || 0,
+        latencyOffsetMs: 0,
         channelColors: slot.channelColors,
         isPitchSplitEnabled: slot.isPitchSplitEnabled,     // ★ 追加
         pitchSplitRules: slot.pitchSplitRules             // ★ 追加
