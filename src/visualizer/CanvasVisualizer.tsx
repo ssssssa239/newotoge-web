@@ -276,7 +276,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
         const lane = lanes[i];
         if (lane.totalNoteCount === 0) continue;
 
-        // この親レーンに属する全サブトラックの音域（minPitch, maxPitch）を統合算出
+        // ① この親レーンに属する全サブトラックの音域（minPitch, maxPitch）を算出
         let minP = 127;
         let maxP = 0;
         let hasNotes = false;
@@ -289,6 +289,9 @@ export const CanvasVisualizer: React.FC<Props> = ({
             : notes;
 
           for (const n of targetNotes) {
+            // ★ ノート番号 1〜10（キースイッチ）は音域計算から除外
+            if (n.pitch <= 10) continue;
+
             minP = Math.min(minP, n.pitch);
             maxP = Math.max(maxP, n.pitch);
             hasNotes = true;
@@ -297,10 +300,24 @@ export const CanvasVisualizer: React.FC<Props> = ({
 
         if (!hasNotes) continue;
 
+        // ★ 音域の中央ピッチ（中心値）と音域幅
+        const centerPitch = (minP + maxP) / 2;
         const pitchRange = Math.max(1, maxP - minP);
-        const laneX = i * laneWidth;
-        const stepX = (laneWidth - 16) / pitchRange;
-        const baseNoteWidth = Math.max(6, Math.min(stepX - 1.5, 28));
+
+        // ★ レーン幅が広くても中央にぎゅっと引き締めるためのステップ計算
+        // 1半音あたりの最大幅（24px）を設けて、少レーン時の間延びを防止
+        const MAX_STEP_X = 24; 
+        const MIN_STEP_X = 8;
+        const availableLaneWidth = laneWidth - 32;
+        const calculatedStepX = availableLaneWidth / (pitchRange + 1);
+        const stepX = Math.max(MIN_STEP_X, Math.min(calculatedStepX, MAX_STEP_X));
+
+        // ★「隣り合うノーツとの隙間が0を超えない」
+        // baseNoteWidth を stepX 以上にすることで隙間を完全にゼロ化
+        const baseNoteWidth = Math.ceil(stepX);
+
+        // レーンの中心X座標
+        const laneCenterX = i * laneWidth + laneWidth / 2;
 
         // 親チャンネル ＋ サブチャンネルのノーツを同一レーン内に重ねて描画
         for (const st of lane.subTracks) {
@@ -308,7 +325,6 @@ export const CanvasVisualizer: React.FC<Props> = ({
           const effectiveTopMs = topMs - offsetMs;
           const effectiveBottomMs = bottomMs - offsetMs;
 
-          // 該当トラックから、このサブトラックに割り当てられた「元Ch」のみを抽出
           let allNotes: MidiNote[] = [];
           if (typeof st.trackIndex === 'number' && song.tracks) {
             const targetTrack = song.tracks.find(t => t.trackIndex === st.trackIndex);
@@ -327,12 +343,14 @@ export const CanvasVisualizer: React.FC<Props> = ({
           const visibleNotes = allNotes.filter(
             n => n.endTimeMs >= effectiveTopMs && n.startTimeMs <= effectiveBottomMs
           );
-          const hitLuminescentColor = getHitLuminescentColor(st.color);
 
           for (const note of visibleNotes) {
+            // ★ ノート番号 1〜10（キースイッチ）はビジュアライザーに描画しない
+            if (note.pitch <= 10) continue;
+
             let noteColor = st.color;
 
-            // ★ 音域分割ルールが有効な場合はピッチ合致ルールの色を最優先
+            // 音域分割ルールの色判定
             if (st.isPitchSplitEnabled && st.pitchSplitRules && st.pitchSplitRules.length > 0) {
               const matched = st.pitchSplitRules.find(r => note.pitch >= r.minPitch && note.pitch <= r.maxPitch);
               if (matched) {
@@ -345,7 +363,6 @@ export const CanvasVisualizer: React.FC<Props> = ({
             }
 
             const hitLuminescentColor = getHitLuminescentColor(noteColor);
-            // ...以降の描画処理
 
             const noteStartWithOffset = note.startTimeMs + offsetMs;
             const noteEndWithOffset = note.endTimeMs + offsetMs;
@@ -354,17 +371,17 @@ export const CanvasVisualizer: React.FC<Props> = ({
             const yTop = judgeLineY - (noteEndWithOffset - currentMs) * speed;
             const noteHeight = Math.max(4, yBottom - yTop);
 
-            const p = Math.min(Math.max(note.pitch, minP), maxP);
-            const innerX = 8 + (p - minP) * stepX;
+            // ★ 中央値ピッチからの差分に基づき、レーン中央を基準に左右配置
+            const pitchOffset = note.pitch - centerPitch;
+            const noteCenterX = laneCenterX + pitchOffset * stepX;
 
             const isHit = currentMs >= noteStartWithOffset && currentMs <= noteEndWithOffset;
-
             const currentWidth = isHit ? baseNoteWidth + 2 : baseNoteWidth;
-            const x = Math.round(laneX + innerX - currentWidth / 2);
+            const x = Math.round(noteCenterX - currentWidth / 2);
 
             // 音ゲー風ネオングロー
             if (isHit && !isChromaKeyEnabled) {
-              ctx.shadowColor = noteColor; // ★ noteColor を使用
+              ctx.shadowColor = noteColor;
               ctx.shadowBlur = 15;
             } else {
               ctx.shadowBlur = 0;
@@ -374,17 +391,17 @@ export const CanvasVisualizer: React.FC<Props> = ({
             const isPrerollNote = isPrerolling && (noteStartWithOffset < targetMs) && !isTouchingAtStart;
             ctx.globalAlpha = isPrerollNote ? 0.30 : 1.0;
 
-            // ① ノーツ本体の塗り（各ノートの色を使用）
+            // ① ノーツ本体の塗り
             ctx.fillStyle = isHit ? hitLuminescentColor : noteColor;
             ctx.beginPath();
-            ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.5);
+            ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.0);
             ctx.fill();
 
             // ② 境界線・輪郭
             ctx.strokeStyle = isChromaKeyEnabled
               ? (isHit ? '#FFFFFF' : 'rgba(0, 0, 0, 0.5)')
               : (isHit ? '#FFFFFF' : 'rgba(10, 14, 26, 0.75)');
-            ctx.lineWidth = isHit ? 1.5 : 1.2;
+            ctx.lineWidth = isHit ? 1.5 : 1.0;
             ctx.stroke();
 
             ctx.globalAlpha = 1.0;
