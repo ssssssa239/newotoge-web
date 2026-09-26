@@ -682,7 +682,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0A0E1A', color: '#E2EFFF', fontFamily: 'sans-serif' }}>
       {/* 1. トランスポートバー */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#141D34', borderBottom: '3px solid #72829F', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#181822', borderBottom: '3px solid #72829F', gap: 12 }}>
         <button
           onClick={() => setIsSidebarOpen(prev => !prev)}
           title={isSidebarOpen ? 'サイドバーを隠す' : 'サイドバーを表示'}
@@ -870,7 +870,7 @@ export function App() {
               gap: 8,
               background: '#1C2742',
               color: '#E2EFFF',
-              border: '1.5px solid #243B54',
+              border: '1.5px solid #334163',
               borderRadius: 6,
               padding: '5px 10px',
               fontSize: 12,
@@ -1064,7 +1064,7 @@ export function App() {
                 boxSizing: 'border-box',
                 padding: 0,
                 background: isStorageMenuOpen ? '#243B54' : '#1C2742',
-                border: '1px solid #243B54',
+                border: '1px solid #334163',
                 borderRadius: 6,
                 color: isStorageMenuOpen ? '#A4D3FF' : '#8FA4C4',
                 cursor: 'pointer',
