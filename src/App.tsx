@@ -817,6 +817,10 @@ export function App() {
           </svg>
         </button>
 
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 17, fontWeight: 'bold', color: '#a0b3cd' }}>Otoge Neo</span>
+        </div>
+
         <button
           onClick={() => PlaybackEngine.getInstance().togglePlayPause()}
           style={{ padding: '6px 14px', background: '#587CEA', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', color: '#ffffff' }}
@@ -1041,7 +1045,7 @@ export function App() {
                 </div>
               ))}
 
-              <div style={{ height: 1, background: '#30354E', margin: '4px 0' }} />
+              <div style={{ height: 1, background: '#3F4164', margin: '4px 0' }} />
 
               <div
                 onClick={() => {
@@ -1111,7 +1115,7 @@ export function App() {
         </div>
 
         {/* タブ切り替え */}
-        <div style={{ background: '#1e2844', borderRadius: 6, padding: 2, display: 'flex' }}>
+        <div style={{ background: '#272938', borderRadius: 6, padding: 2, display: 'flex' }}>
           <button
             onClick={() => setSelectedTab('visualizer')}
             style={{ padding: '4px 10px', background: selectedTab === 'visualizer' ? '#5977A0' : 'transparent', color: '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
@@ -1491,7 +1495,7 @@ export function App() {
                   <button
                     onClick={() => setIsManageModalOpen(true)}
                     title="MIDIデバイスの登録・整理"
-                    style={{ fontSize: 11, background: '#474664', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ fontSize: 11, background: '#464b64', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     管理
                   </button>
@@ -1755,8 +1759,8 @@ export function App() {
                               alignItems: 'center',
                               gap: 10,
                               padding: '10px 14px',
-                              background: slot.isEnabled ? '#181b2d' : '#141622',
-                              border: '1px solid #30354E',
+                              background: slot.isEnabled ? '#11121e' : '#11121e',
+                              border: '1px solid #2f3049',
                               borderRadius: 6,
                               position: 'relative',
                               zIndex: (isColorPickerOpen || activeChannelMenuSlotId === slot.id || activeKeySwitchMenuSlotId === slot.id) ? 100 : 1,
@@ -2309,7 +2313,7 @@ export function App() {
                                       cursor: 'pointer',
                                       fontSize: 11,
                                       color: !slot.keySwitchPresetName ? '#becfe5' : '#E3EFFF',
-                                      background: !slot.keySwitchPresetName ? '#30354E' : 'transparent',
+                                      background: !slot.keySwitchPresetName ? '#3F4164' : 'transparent',
                                       fontWeight: !slot.keySwitchPresetName ? 'bold' : 'normal'
                                     }}
                                   >
@@ -2334,8 +2338,8 @@ export function App() {
                                             justifyContent: 'space-between',
                                             padding: '4px 6px',
                                             borderRadius: 4,
-                                            background: isSelected ? '#191B2D' : 'transparent',
-                                            border: isSelected ? '1px solid #30354E' : '1px solid transparent'
+                                            background: isSelected ? '#3F4164' : 'transparent',
+                                            border: isSelected ? '1px solid #3F4164' : '1px solid transparent'
                                           }}
                                         >
                                           <span
@@ -2544,8 +2548,8 @@ export function App() {
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       padding: '8px 12px',
-                      background: '#191B2D',
-                      border: '1px solid #30354E',
+                      background: '#11121e',
+                      border: '1px solid #3F4164',
                       borderRadius: 4
                     }}
                   >
@@ -2580,21 +2584,29 @@ export function App() {
               })}
             </div>
 
-            <div style={{ borderTop: '1px solid #30354E', paddingTop: 14 }}>
+            <div style={{ borderTop: '1px solid #3F4164', paddingTop: 14 }}>
               <div style={{ fontSize: 12, fontWeight: 'bold', color: '#becfe5', marginBottom: 6 }}>
                 楽器名を事前登録
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
+                {/* ★ プレースホルダー色を強制指定するスタイル */}
+                <style>{`
+                  .custom-mcu-input::placeholder {
+                    color: #767a9f !important;
+                    opacity: 1; /* Firefox等で半透明になるのを防止 */
+                  }
+                `}</style>
                 <input
                   type="text"
+                  className="custom-mcu-input" /* ★ クラス名を追加 */
                   placeholder="ここに入力"
                   value={newMcuInput}
                   onChange={e => setNewMcuInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleRegisterManualMcu()}
                   style={{
                     flex: 1,
-                    background: '#191B2D',
-                    border: '1px solid #30354E',
+                    background: '#11121e',
+                    border: '1px solid #3F4164',
                     borderRadius: 6,
                     color: '#E2EFFF',
                     padding: '6px 10px',
