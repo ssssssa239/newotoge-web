@@ -818,7 +818,20 @@ export function App() {
         </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 17, fontWeight: 'bold', color: '#a0b3cd' }}>Otoge Neo</span>
+          <span style={{ fontSize: 17, fontWeight: 'bold', color: '#a0b3cd', textDecoration: 'underline',}}>Otoge Neo</span>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 'bold',
+              color: '#a0b3cd',
+              position: 'relative',
+              top: 3,
+              display: 'inline-block',
+              marginLeft: -2,
+            }}
+          >
+            v.2.0
+          </span>
         </div>
 
         <button
