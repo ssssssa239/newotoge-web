@@ -10,6 +10,7 @@ import { CanvasVisualizer } from './visualizer/CanvasVisualizer';
 import { CircularColorPicker } from './components/CircularColorPicker';
 import { CalibrationView } from './components/calibration/CalibrationView';
 import { StandaloneTransferManager, TransferProgress } from './engine/serial/StandaloneTransferManager';
+import { KeySwitchManager, LoadedKeySwitchPreset } from './utils/KeySwitchManager'; // ★ 追加
 
 // デフォルトのチャンネル色配列 (カスタム未設定時に適用)
 const DEFAULT_CHANNEL_COLORS = [
@@ -64,7 +65,7 @@ export function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentPlaybackMs, setCurrentPlaybackMs] = useState(0);
   const [isMetronome, setIsMetronome] = useState(true);
-  const [isBgm, setIsBgm] = useState(true);
+  const [isBgm, setIsBgm] = useState(false);
   const [isChromaKey, setIsChromaKey] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [showAllCh, setShowAllCh] = useState(false);
@@ -96,6 +97,15 @@ export function App() {
 
   // Ch別カラー設定メニューを開いているスロットのID
   const [activeChannelMenuSlotId, setActiveChannelMenuSlotId] = useState<string | null>(null);
+
+  // ★★★ ここから追加 ★★★
+  // 読み込んだキースイッチJSONファイル一覧
+  const [loadedKeySwitchPresets, setLoadedKeySwitchPresets] = useState<LoadedKeySwitchPreset[]>([]);
+  // キースイッチメニューを開いているスロットのID
+  const [activeKeySwitchMenuSlotId, setActiveKeySwitchMenuSlotId] = useState<string | null>(null);
+  // JSON読み込み用 input 参照
+  const jsonFileInputRef = useRef<HTMLInputElement | null>(null);
+  // ★★★ ここまで追加 ★★★
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -227,6 +237,8 @@ export function App() {
       let loadedPresets: EnsemblePreset[] = [{ id: 'default', name: 'プリセット 1', songSlots: {} }];
       let loadedActiveId = 'default';
 
+      engine.isBgmEnabled = false;
+
       const presetData = await storage.loadPresetsData();
       if (presetData && presetData.presets.length > 0) {
         loadedPresets = presetData.presets;
@@ -234,6 +246,19 @@ export function App() {
         setPresets(loadedPresets);
         setActivePresetId(loadedActiveId);
       }
+
+      // ★★★ ここから追加：キースイッチJSONの復元 ★★★
+      const savedKeySwitches = await storage.loadKeySwitchPresets();
+      const restoredKeySwitchPresets: LoadedKeySwitchPreset[] = [];
+
+      for (const item of savedKeySwitches) {
+        const parsed = KeySwitchManager.parsePresetKeySwitches(item.fileName, item.jsonContent);
+        if (parsed) {
+          restoredKeySwitchPresets.push(parsed);
+        }
+      }
+      setLoadedKeySwitchPresets(restoredKeySwitchPresets);
+      // ★★★ ここまで追加 ★★★
 
       const metadataList = await storage.loadSongMetadataList();
       const loadedSongs: MidiSongData[] = [];
@@ -252,6 +277,19 @@ export function App() {
         } else if (meta.slots && meta.slots.length > 0) {
           song.slots = meta.slots;
         }
+        // ★★★ ここから追加：スロットに設定されたキースイッチをトラックノーツに自動バインド ★★★
+        if (song.slots && song.tracks) {
+          song.slots.forEach(slot => {
+            if (slot.keySwitchPresetName) {
+              const matchedPreset = restoredKeySwitchPresets.find(p => p.fileName === slot.keySwitchPresetName);
+              const track = song.tracks.find(t => t.trackIndex === slot.trackIndex);
+              if (track && matchedPreset) {
+                KeySwitchManager.applyKeySwitchesToNotes(track.notes, matchedPreset.keySwitchMap);
+              }
+            }
+          });
+        }
+        // ★★★ ここまで追加 ★★★
 
         loadedSongs.push(song);
       }
@@ -573,6 +611,81 @@ export function App() {
     }
   };
 
+  // ★★★ ここから追加 ★★★
+  // ① JSONファイル読み込みハンドラー
+  const handleKeySwitchJsonUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileList = Array.from(files);
+    let loadedCount = 0;
+
+    fileList.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const content = event.target?.result as string;
+        if (!content) return;
+        const parsed = KeySwitchManager.parsePresetKeySwitches(file.name, content);
+        if (parsed) {
+          setLoadedKeySwitchPresets(prev => {
+            const filtered = prev.filter(p => p.fileName !== file.name);
+            const updated = [...filtered, parsed];
+
+            // ★ IndexedDB に保存
+            const records = updated.map(p => ({
+              fileName: p.fileName,
+              jsonContent: p.jsonContent
+            }));
+            StorageManager.getInstance().saveKeySwitchPresets(records);
+
+            return updated;
+          });
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    e.target.value = '';
+  };
+
+  // ② キースイッチプリセットの選択/解除
+  const handleSelectKeySwitchPreset = (slot: LaneSlot, track: MidiTrackInfo, presetName: string | null) => {
+    const selectedPreset = loadedKeySwitchPresets.find(p => p.fileName === presetName);
+    KeySwitchManager.applyKeySwitchesToNotes(track.notes, selectedPreset?.keySwitchMap);
+    handleUpdateSlot(slot.id, { keySwitchPresetName: presetName || undefined }, track);
+    setActiveKeySwitchMenuSlotId(null);
+  };
+
+  // ③ キースイッチプリセットの削除
+  const handleDeleteKeySwitchPreset = async (fileName: string) => {
+    const isConfirmed = window.confirm(`${fileName} を削除します。よろしいですか？`);
+    if (!isConfirmed) return;
+
+    const updated = loadedKeySwitchPresets.filter(p => p.fileName !== fileName);
+    setLoadedKeySwitchPresets(updated);
+
+    // ★ IndexedDB を更新保存
+    const records = updated.map(p => ({
+      fileName: p.fileName,
+      jsonContent: p.jsonContent
+    }));
+    await StorageManager.getInstance().saveKeySwitchPresets(records);
+
+    // 削除されたプリセットを使用していたスロットの適用を解除
+    if (currentSong) {
+      currentSong.slots.forEach(slot => {
+        if (slot.keySwitchPresetName === fileName) {
+          const track = currentSong.tracks?.find(t => t.trackIndex === slot.trackIndex);
+          if (track) {
+            KeySwitchManager.applyKeySwitchesToNotes(track.notes, undefined);
+            handleUpdateSlot(slot.id, { keySwitchPresetName: undefined }, track);
+          }
+        }
+      });
+    }
+  };
+  // ★★★ ここまで追加 ★★★
+
   const handleUpdateSlot = async (slotId: string, updates: Partial<LaneSlot>, fallbackTrack?: MidiTrackInfo) => {
     if (!currentSong) return;
 
@@ -680,7 +793,7 @@ export function App() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0A0E1A', color: '#E2EFFF', fontFamily: 'sans-serif' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#080B14', color: '#E2EFFF', fontFamily: 'sans-serif' }}>
       {/* 1. トランスポートバー */}
       <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', background: '#181822', borderBottom: '3px solid #72829F', gap: 12 }}>
         <button
@@ -691,10 +804,10 @@ export function App() {
             alignItems: 'center',
             justifyContent: 'center',
             padding: '5px 8px',
-            background: isSidebarOpen ? '#243B54' : '#1C2742',
-            border: '1px solid #243B54',
+            background: isSidebarOpen ? '#50587c' : '#1E202C',
+            border: '1px solid #50587c',
             borderRadius: 6,
-            color: '#A4D3FF',
+            color: '#a0b3cd',
             cursor: 'pointer'
           }}
         >
@@ -735,7 +848,7 @@ export function App() {
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            background: isMetronome ? '#706cad' : '#1C2742',
+            background: isMetronome ? '#6a66a7' : '#1E202C',
             borderRadius: 6,
             position: 'relative'
           }}
@@ -855,7 +968,7 @@ export function App() {
             setIsBgm(next);
             PlaybackEngine.getInstance().isBgmEnabled = next;
           }}
-          style={{ padding: '4px 8px', background: isBgm ? '#8871c4' : '#1C2742', border: 'none', borderRadius: 6, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
+          style={{ padding: '4px 8px', background: isBgm ? '#8769be' : '#1E202C', border: 'none', borderRadius: 6, color: '#E2EFFF', fontSize: 11, cursor: 'pointer' }}
         >
           BGM {isBgm ? 'ON' : 'OFF'}
         </button>
@@ -868,9 +981,9 @@ export function App() {
               display: 'flex',
               alignItems: 'center',
               gap: 8,
-              background: '#1C2742',
+              background: '#1E202C',
               color: '#E2EFFF',
-              border: '1.5px solid #334163',
+              border: '1.5px solid #50587c',
               borderRadius: 6,
               padding: '5px 10px',
               fontSize: 12,
@@ -878,7 +991,7 @@ export function App() {
             }}
           >
             <span>{activePreset?.name ?? 'プリセット選択'}</span>
-            <span style={{ fontSize: 9, color: '#A4D3FF' }}>▼</span>
+            <span style={{ fontSize: 9, color: '#a0b3cd' }}>▼</span>
           </button>
 
           {isPresetMenuOpen && (
@@ -888,7 +1001,7 @@ export function App() {
                 top: 'calc(100% + 4px)',
                 left: 0,
                 minWidth: 200,
-                background: '#141D34',
+                background: '#0A0E1A',
                 border: '1px solid #e7cdad',
                 borderRadius: 6,
                 boxShadow: '0 6px 18px rgba(0,0,0,0.55)',
@@ -896,7 +1009,7 @@ export function App() {
                 zIndex: 1000
               }}
             >
-              <div style={{ padding: '5px 12px', fontSize: 10, fontWeight: 'bold', color: '#8FA4C4' }}>
+              <div style={{ padding: '5px 12px', fontSize: 10, fontWeight: 'bold', color: '#becfe5' }}>
                 編成プリセット選択
               </div>
               {presets.map(p => (
@@ -913,11 +1026,11 @@ export function App() {
                     padding: '6px 12px',
                     fontSize: 12,
                     cursor: 'pointer',
-                    background: p.id === activePresetId ? 'rgba(78, 167, 230, 0.15)' : 'transparent',
-                    color: p.id === activePresetId ? '#A4D3FF' : '#E2EFFF'
+                    background: p.id === activePresetId ? '#3d415f' : 'transparent',
+                    color: p.id === activePresetId ? '#E3EFFF' : '#E3EFFF'
                   }}
                   onMouseEnter={e => {
-                    if (p.id !== activePresetId) e.currentTarget.style.background = '#1C2742';
+                    if (p.id !== activePresetId) e.currentTarget.style.background = '#1E202C';
                   }}
                   onMouseLeave={e => {
                     if (p.id !== activePresetId) e.currentTarget.style.background = 'transparent';
@@ -928,7 +1041,7 @@ export function App() {
                 </div>
               ))}
 
-              <div style={{ height: 1, background: '#243B54', margin: '4px 0' }} />
+              <div style={{ height: 1, background: '#30354E', margin: '4px 0' }} />
 
               <div
                 onClick={() => {
@@ -939,12 +1052,12 @@ export function App() {
                   padding: '6px 12px',
                   fontSize: 12,
                   cursor: 'pointer',
-                  color: '#A4D3FF',
+                  color: '#E3EFFF',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = '#1C2742')}
+                onMouseEnter={e => (e.currentTarget.style.background = '#1E202C')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <span>＋</span>
@@ -960,12 +1073,12 @@ export function App() {
                   padding: '6px 12px',
                   fontSize: 12,
                   cursor: 'pointer',
-                  color: '#E2EFFF',
+                  color: '#becfe5',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = '#1C2742')}
+                onMouseEnter={e => (e.currentTarget.style.background = '#1E202C')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <span>✎</span>
@@ -987,7 +1100,7 @@ export function App() {
                     alignItems: 'center',
                     gap: 0
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#1C2742')}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#1E202C')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <span>⚠︎ 現在のプリセットを削除</span>
@@ -1001,13 +1114,13 @@ export function App() {
         <div style={{ background: '#1e2844', borderRadius: 6, padding: 2, display: 'flex' }}>
           <button
             onClick={() => setSelectedTab('visualizer')}
-            style={{ padding: '4px 10px', background: selectedTab === 'visualizer' ? '#5D7FAF' : 'transparent', color: '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
+            style={{ padding: '4px 10px', background: selectedTab === 'visualizer' ? '#5977A0' : 'transparent', color: '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
           >
             Visualizer
           </button>
           <button
             onClick={() => setSelectedTab('settings')}
-            style={{ padding: '4px 10px', background: selectedTab === 'settings' ? '#5D7FAF' : 'transparent', color: '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
+            style={{ padding: '4px 10px', background: selectedTab === 'settings' ? '#5977A0' : 'transparent', color: '#E2EFFF', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}
           >
             Track Settings
           </button>
@@ -1016,7 +1129,7 @@ export function App() {
             onClick={() => setSelectedTab('calibration')}
             style={{
               padding: '4px 10px',
-              background: selectedTab === 'calibration' ? '#5D7FAF' : 'transparent',
+              background: selectedTab === 'calibration' ? '#5977A0' : 'transparent',
               color: '#E2EFFF',
               border: 'none',
               borderRadius: 3,
@@ -1038,10 +1151,10 @@ export function App() {
               height: 28,
               boxSizing: 'border-box',
               padding: 0,
-              background: isControlBarOpen ? '#243B54' : '#1C2742',
-              border: '1px solid #243B54',
+              background: isControlBarOpen ? '#50587c' : '#1E202C',
+              border: '1px solid #50587c',
               borderRadius: 6,
-              color: isControlBarOpen ? '#A4D3FF' : '#8FA4C4',
+              color: isControlBarOpen ? '#E3EFFF' : '#a0b3cd',
               cursor: 'pointer',
               fontSize: 10,
               lineHeight: 1,
@@ -1063,10 +1176,10 @@ export function App() {
                 height: 28,
                 boxSizing: 'border-box',
                 padding: 0,
-                background: isStorageMenuOpen ? '#243B54' : '#1C2742',
-                border: '1px solid #334163',
+                background: isStorageMenuOpen ? '#50587c' : '#1E202C',
+                border: '1px solid #50587c',
                 borderRadius: 6,
-                color: isStorageMenuOpen ? '#A4D3FF' : '#8FA4C4',
+                color: isStorageMenuOpen ? '#E3EFFF' : '#a0b3cd',
                 cursor: 'pointer',
                 fontSize: 10,
                 lineHeight: 1,
@@ -1089,7 +1202,7 @@ export function App() {
                   top: 'calc(100% + 6px)',
                   right: 0,
                   width: 230,
-                  background: '#141D34',
+                  background: '#0A0E1A',
                   border: '1px solid #e7cdad',
                   borderRadius: 6,
                   boxShadow: '0 6px 18px rgba(0,0,0,0.55)',
@@ -1097,17 +1210,17 @@ export function App() {
                   zIndex: 1000
                 }}
               >
-                <div style={{ fontSize: 11, fontWeight: 'bold', color: '#A4D3FF', marginBottom: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 'bold', color: '#becfe5', marginBottom: 8 }}>
                   ローカルストレージ (IndexedDB)
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                  <span style={{ color: '#8FA4C4' }}>使用量:</span>
+                  <span style={{ color: '#E3EFFF' }}>使用量:</span>
                   <span style={{ fontWeight: 'bold', color: '#E2EFFF' }}>{formatBytes(storageInfo.usage)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 8 }}>
-                  <span style={{ color: '#8FA4C4' }}>割当上限:</span>
-                  <span style={{ color: '#E2EFFF' }}>{formatBytes(storageInfo.quota)}</span>
+                  <span style={{ color: '#E3EFFF' }}>割当上限:</span>
+                  <span style={{ color: '#E3EFFF' }}>{formatBytes(storageInfo.quota)}</span>
                 </div>
 
                 <div style={{ width: '100%', height: 6, background: '#1C2742', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
@@ -1121,7 +1234,7 @@ export function App() {
                   />
                 </div>
 
-                <div style={{ fontSize: 10, color: '#8FA4C4', textAlign: 'right' }}>
+                <div style={{ fontSize: 10, color: '#a0b3cd', textAlign: 'right' }}>
                   使用率: {((storageInfo.usage / (storageInfo.quota || 1)) * 100).toFixed(2)}%
                 </div>
               </div>
@@ -1182,9 +1295,9 @@ export function App() {
                 }
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 12px 8px 12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 12px 12px 12px' }}>
                 <span style={{ fontSize: 14, fontWeight: 'bold', color: '#c1cfe3' }}>楽曲リスト ({songs.length})</span>
-                <label style={{ fontSize: 11, background: '#5D7FAF', color: '#E2EFFF', padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
+                <label style={{ fontSize: 11, background: '#5977A0', color: '#E2EFFF', padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
                   + 追加
                   <input type="file" multiple accept=".mid,.midi" onChange={handleMidiUpload} style={{ display: 'none' }} />
                 </label>
@@ -1211,7 +1324,7 @@ export function App() {
                 </div>
               )}
 
-              <div style={{ flex: 1, overflowY: 'scroll', padding: '0 3px 12px 12px' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 12px 9.5px' }}>
                 {songs.map((song, index) => {
                 const isSelected = song.id === selectedSongId;
                 const isDragging = draggedSongIndex === index;
@@ -1258,8 +1371,8 @@ export function App() {
                       marginBottom: 4,
                       borderRadius: 6,
                       cursor: isDragging ? 'grabbing' : 'grab',
-                      background: isSelected ? 'rgba(78, 167, 230, 0.12)' : '#181822',
-                      border: isSelected ? '1px solid #8abfdb' : '1px solid transparent',
+                      background: isSelected ? '#181822' : '#181822',
+                      border: isSelected ? '1px solid #e7cdad' : '1px solid transparent',
                       boxSizing: 'border-box',
                       opacity: isDragging ? 0.35 : 1.0,
                       boxShadow: isDragOver ? '0 -3px 0 0 #cbd9eb' : 'none',
@@ -1279,7 +1392,7 @@ export function App() {
                       >
                         {song.fileName.replace(/\.midi?$/i, '')}
                       </div>
-                      <div style={{ fontSize: 11, color: '#8FA4C4', marginTop: 2 }}>
+                      <div style={{ fontSize: 11, color: '#becfe5', marginTop: 2 }}>
                         {formatTime(song.durationMs)} {song.bgmFileName && '• BGM付'}
                       </div>
                     </div>
@@ -1378,20 +1491,20 @@ export function App() {
                   <button
                     onClick={() => setIsManageModalOpen(true)}
                     title="MIDIデバイスの登録・整理"
-                    style={{ fontSize: 11, background: '#243B54', border: 'none', color: '#A4D3FF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ fontSize: 11, background: '#474664', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     管理
                   </button>
                   <button
                     onClick={() => MidiDeviceManager.getInstance().probeSerialDeviceManually()}
                     title="USB接続されたマイコンから楽器名を直接取得して自動照合します"
-                    style={{ fontSize: 11, background: '#175883', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ fontSize: 11, background: '#295e81', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     + USB
                   </button>
                   <button
                     onClick={() => MidiDeviceManager.getInstance().connectBleDevice()}
-                    style={{ fontSize: 11, background: '#4058C2', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
+                    style={{ fontSize: 11, background: '#5064bd', border: 'none', color: '#E2EFFF', padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}
                   >
                     + BLE
                   </button>
@@ -1519,7 +1632,7 @@ export function App() {
                     gap: 12,
                     padding: '6px 16px',
                     background: isChromaKey ? '#00CC00' : '#121217',
-                    borderBottom: '1px solid #243B54',
+                    borderBottom: '2px solid #50587c',
                     fontSize: 12,
                     flexShrink: 0
                   }}
@@ -1577,10 +1690,40 @@ export function App() {
                   {/* 上部BGM連携バー */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 2 }}>
                     <label style={{ fontSize: 12, background: '#175883', color: '#E2EFFF', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontWeight: 'bold' }}>
-                      BGM音声を紐付け (.mp3, .wav, .ogg)
+                      BGM追加 (.mp3, .wav, .ogg)
                       <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: 'none' }} />
                     </label>
                     {currentSong.bgmFileName && <span style={{ fontSize: 12, color: '#88D5DA' }}>{currentSong.bgmFileName}</span>}
+                    {/* ★★★ ここから追加：キースイッチJSON読込 ★★★ */}
+                    <input
+                      type="file"
+                      ref={jsonFileInputRef}
+                      accept=".json"
+                      multiple
+                      style={{ display: 'none' }}
+                      onChange={handleKeySwitchJsonUpload}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => jsonFileInputRef.current?.click()}
+                      style={{
+                        padding: '6px 12px',
+                        background: '#26548e',
+                        border: '0px solid #50587c',
+                        borderRadius: 6,
+                        color: '#E3EFFF',
+                        fontSize: 12,
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6
+                      }}
+                    >
+                      JSONファイル読込
+                      
+                    </button>
+                    {/* ★★★ ここまで追加 ★★★ */}
                   </div>
                   {/* トラックカード一覧 */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1616,7 +1759,7 @@ export function App() {
                               border: '1px solid #30354E',
                               borderRadius: 6,
                               position: 'relative',
-                              zIndex: (isColorPickerOpen || activeChannelMenuSlotId === slot.id) ? 100 : 1,
+                              zIndex: (isColorPickerOpen || activeChannelMenuSlotId === slot.id || activeKeySwitchMenuSlotId === slot.id) ? 100 : 1,
                               transition: 'background 0.15s'
                             }}
                           >
@@ -2088,6 +2231,159 @@ export function App() {
                               </span>
                             </div>
 
+                            {/* ★★★ ここから追加：キースイッチボタン ＆ メニュー ★★★ */}
+                            <div style={{ position: 'relative' }}>
+                              <button
+                                type="button"
+                                onClick={() => setActiveKeySwitchMenuSlotId(activeKeySwitchMenuSlotId === slot.id ? null : slot.id)}
+                                style={{
+                                  padding: slot.keySwitchPresetName ? '3px 8px' : '5px 8px',
+                                  minWidth: 76,
+                                  background: '#1A1E2E',
+                                  border: `1px solid ${slot.keySwitchPresetName ? '#85b4e9' : '#3D4764'}`,
+                                  borderRadius: 5,
+                                  color: slot.keySwitchPresetName ? '#E3EFFF' : '#a0b3cd',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 1
+                                }}
+                                title="キースイッチ設定の適用"
+                              >
+                                {/* 上段：キースイッチ ＋ ▼ */}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, fontSize: 11, lineHeight: 1.2 }}>
+                                  <span>キースイッチ</span>
+                                  <span style={{ fontSize: 8 }}>▼</span>
+                                </div>
+
+                                {/* 下段：選択されたJSONファイル名（拡張子なし、横軸中央揃え） */}
+                                {slot.keySwitchPresetName && (
+                                  <div
+                                    style={{
+                                      fontSize: 8.5,
+                                      lineHeight: 1.1,
+                                      color: '#becfe5',
+                                      maxWidth: 72,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      textAlign: 'center'
+                                    }}
+                                  >
+                                    {slot.keySwitchPresetName.replace(/\.[^/.]+$/, '')}
+                                  </div>
+                                )}
+                              </button>
+
+                              {/* ポップアップメニュー */}
+                              {activeKeySwitchMenuSlotId === slot.id && (
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    top: 'calc(100% + 4px)',
+                                    left: 0,
+                                    width: 220,
+                                    background: '#080B14',
+                                    border: '1px solid #e7cdad',
+                                    borderRadius: 6,
+                                    padding: 6,
+                                    boxShadow: '0 8px 24px rgba(0,0,0,0.85)',
+                                    zIndex: 1100,
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 4
+                                  }}
+                                >
+                                  <div style={{ fontSize: 12, fontWeight: 'bold', color: '#becfe5', padding: '2px 4px', borderBottom: '1px solid #2F3752' }}>
+                                    キースイッチ設定 (JSON)
+                                  </div>
+
+                                  {/* 解除（なし） */}
+                                  <div
+                                    onClick={() => handleSelectKeySwitchPreset(slot, track, null)}
+                                    style={{
+                                      padding: '4px 6px',
+                                      borderRadius: 4,
+                                      cursor: 'pointer',
+                                      fontSize: 11,
+                                      color: !slot.keySwitchPresetName ? '#becfe5' : '#E3EFFF',
+                                      background: !slot.keySwitchPresetName ? '#30354E' : 'transparent',
+                                      fontWeight: !slot.keySwitchPresetName ? 'bold' : 'normal'
+                                    }}
+                                  >
+                                    なし（適用解除）
+                                  </div>
+
+                                  {/* 読み込み済みJSON一覧 */}
+                                  {loadedKeySwitchPresets.length === 0 ? (
+                                    <div style={{ fontSize: 10, color: '#6B7280', padding: '6px 4px', textAlign: 'center' }}>
+                                      JSONファイルが未読込です。<br />上部の「JSONファイル読込」から追加してください。
+                                    </div>
+                                  ) : (
+                                    loadedKeySwitchPresets.map(preset => {
+                                      const isSelected = slot.keySwitchPresetName === preset.fileName;
+                                      const displayName = preset.fileName.replace(/\.[^/.]+$/, '');
+                                      return (
+                                        <div
+                                          key={preset.fileName}
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            padding: '4px 6px',
+                                            borderRadius: 4,
+                                            background: isSelected ? '#191B2D' : 'transparent',
+                                            border: isSelected ? '1px solid #30354E' : '1px solid transparent'
+                                          }}
+                                        >
+                                          <span
+                                            onClick={() => handleSelectKeySwitchPreset(slot, track, preset.fileName)}
+                                            style={{
+                                              cursor: 'pointer',
+                                              fontSize: 11,
+                                              color: isSelected ? '#becfe5' : '#E3EFFF',
+                                              fontWeight: isSelected ? 'bold' : 'normal',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap',
+                                              flex: 1
+                                            }}
+                                            title={preset.fileName}
+                                          >
+                                            {displayName}
+                                          </span>
+
+                                          {/* ✕ 削除ボタン */}
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleDeleteKeySwitchPreset(preset.fileName);
+                                            }}
+                                            style={{
+                                              background: 'transparent',
+                                              border: 'none',
+                                              color: '#FF6B81',
+                                              cursor: 'pointer',
+                                              fontSize: 12,
+                                              padding: '0 4px',
+                                              marginLeft: 4
+                                            }}
+                                            title="このJSON設定を削除"
+                                          >
+                                            ✕
+                                          </button>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            {/* ★★★ ここまで追加 ★★★ */}
+
                             {/* 転送ボタン */}
                             <button
                               type="button"
@@ -2203,7 +2499,7 @@ export function App() {
           <div
             style={{
               width: 520,
-              background: '#141D34',
+              background: '#080B14',
               border: '1.5px solid #DBB28A',
               borderRadius: 8,
               boxShadow: '0 8px 30px rgba(0,0,0,0.7)',
@@ -2215,10 +2511,10 @@ export function App() {
             onClick={e => e.stopPropagation()}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, color: '#DFEEFE' }}>デバイス管理</h3>
+              <h3 style={{ margin: 0, color: '#becfe5' }}>デバイス管理</h3>
               <button
                 onClick={() => setIsManageModalOpen(false)}
-                style={{ background: 'transparent', border: 'none', color: '#8FA4C4', fontSize: 16, cursor: 'pointer' }}
+                style={{ background: 'transparent', border: 'none', color: '#a0b3cd', fontSize: 16, cursor: 'pointer' }}
               >
                 ✕
               </button>
@@ -2226,7 +2522,7 @@ export function App() {
 
             <div style={{ maxHeight: 250, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
               {knownPresets.filter(p => p.id !== 0 && p.mcuName !== 'None').length === 0 && (
-                <div style={{ color: '#8FA4C4', fontSize: 12, padding: '12px 0', textAlign: 'center' }}>
+                <div style={{ color: '#a0b3cd', fontSize: 12, padding: '12px 0', textAlign: 'center' }}>
                   登録されている楽器はありません。
                 </div>
               )}
@@ -2248,8 +2544,8 @@ export function App() {
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       padding: '8px 12px',
-                      background: '#1C2742',
-                      border: '1px solid #243B54',
+                      background: '#191B2D',
+                      border: '1px solid #30354E',
                       borderRadius: 4
                     }}
                   >
@@ -2257,7 +2553,7 @@ export function App() {
                       <div style={{ fontWeight: 'bold', fontSize: 13 }}>
                         {isOnline ? '🟢' : '⚪'} {preset.name}
                       </div>
-                      <div style={{ fontSize: 11, color: '#8FA4C4', marginTop: 2 }}>
+                      <div style={{ fontSize: 11, color: '#a0b3cd', marginTop: 2 }}>
                         {isOnline ? '実機接続中' : '未接続'} / {usedCount > 0 ? `${usedCount}箇所のスロットで使用中` : '未使用'}
                       </div>
                     </div>
@@ -2284,8 +2580,8 @@ export function App() {
               })}
             </div>
 
-            <div style={{ borderTop: '1px solid #243B54', paddingTop: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 'bold', color: '#8FA4C4', marginBottom: 6 }}>
+            <div style={{ borderTop: '1px solid #30354E', paddingTop: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 'bold', color: '#becfe5', marginBottom: 6 }}>
                 楽器名を事前登録
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -2297,8 +2593,8 @@ export function App() {
                   onKeyDown={e => e.key === 'Enter' && handleRegisterManualMcu()}
                   style={{
                     flex: 1,
-                    background: '#1C2742',
-                    border: '1px solid #243B54',
+                    background: '#191B2D',
+                    border: '1px solid #30354E',
                     borderRadius: 6,
                     color: '#E2EFFF',
                     padding: '6px 10px',
@@ -2308,7 +2604,7 @@ export function App() {
                 <button
                   onClick={handleRegisterManualMcu}
                   style={{
-                    background: '#5D7FAF',
+                    background: '#5977A0',
                     border: 'none',
                     borderRadius: 6,
                     color: '#ffffff',

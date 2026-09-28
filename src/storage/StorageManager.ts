@@ -13,6 +13,14 @@ export interface SongMetadata {
 const DB_NAME = 'NewOtogeDB';
 const DB_VERSION = 1;
 
+// 保存用レコード型のエクスポート
+export interface KeySwitchPresetRecord {
+  fileName: string;
+  jsonContent: string;
+}
+
+const KEY_SWITCHES_STORAGE_KEY = 'app_keyswitch_presets_data';
+
 export class StorageManager {
   private static instance: StorageManager;
   private dbPromise: Promise<IDBPDatabase>;
@@ -97,5 +105,30 @@ export class StorageManager {
       activePresetID: res.activePresetID,
       presets: res.presets
     };
+  }
+  /**
+   * 読み込み済みキースイッチJSON一覧を IndexedDB に保存
+   */
+  public async saveKeySwitchPresets(presets: KeySwitchPresetRecord[]): Promise<void> {
+    const jsonStr = JSON.stringify(presets);
+    const encoder = new TextEncoder();
+    const buffer = encoder.encode(jsonStr).buffer;
+    await this.saveBlob(KEY_SWITCHES_STORAGE_KEY, buffer);
+  }
+
+  /**
+   * IndexedDB からキースイッチJSON一覧を読み込み
+   */
+  public async loadKeySwitchPresets(): Promise<KeySwitchPresetRecord[]> {
+    const buffer = await this.getBlob(KEY_SWITCHES_STORAGE_KEY);
+    if (!buffer) return [];
+    try {
+      const decoder = new TextDecoder();
+      const jsonStr = decoder.decode(buffer);
+      return JSON.parse(jsonStr) as KeySwitchPresetRecord[];
+    } catch (e) {
+      console.error('キースイッチプリセットの復元に失敗しました:', e);
+      return [];
+    }
   }
 }

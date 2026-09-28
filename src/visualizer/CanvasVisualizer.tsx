@@ -209,7 +209,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
       ctx.scale(dpr, dpr);
 
       // 背景クリア
-      ctx.fillStyle = isChromaKeyEnabled ? '#00FF00' : '#0A0E1A';
+      ctx.fillStyle = isChromaKeyEnabled ? '#00FF00' : '#080B14';
       ctx.fillRect(0, 0, width, height);
 
       if (!song || lanes.length === 0) {
@@ -250,7 +250,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
       }
 
       // 2. レーン境界線
-      ctx.strokeStyle = isChromaKeyEnabled ? 'rgba(0, 0, 0, 0.3)' : 'rgba(36, 59, 84, 0.7)';
+      ctx.strokeStyle = isChromaKeyEnabled ? 'rgba(0, 0, 0, 0.3)' : '#5f616d';
       ctx.lineWidth = 1.5;
       for (let i = 1; i < lanes.length; i++) {
         const x = i * laneWidth;
@@ -403,6 +403,84 @@ export const CanvasVisualizer: React.FC<Props> = ({
               : (isHit ? '#FFFFFF' : 'rgba(10, 14, 26, 0.75)');
             ctx.lineWidth = isHit ? 1.5 : 1.0;
             ctx.stroke();
+            // ① ノーツ本体の塗り
+            ctx.fillStyle = isHit ? hitLuminescentColor : noteColor;
+            ctx.beginPath();
+            ctx.roundRect(x, yTop, currentWidth, noteHeight, 2.0);
+            ctx.fill();
+
+            // ② 境界線・輪郭
+            ctx.strokeStyle = isChromaKeyEnabled
+              ? (isHit ? '#FFFFFF' : 'rgba(0, 0, 0, 0.5)')
+              : (isHit ? '#FFFFFF' : 'rgba(10, 14, 26, 0.75)');
+            ctx.lineWidth = isHit ? 1.5 : 1.0;
+            ctx.stroke();
+
+            // ★★★ ③ 奏法表示：左右はみ出し検知 ＆ 超過時は ◀︎ のみ表示 ★★★
+            if (note.articulation) {
+              const tagText = note.articulation.name;
+
+              ctx.save();
+              ctx.font = 'bold 20px sans-serif';
+              ctx.textBaseline = 'bottom';
+
+              const arrowSpacing = 4;
+              const nameWidth = ctx.measureText(tagText).width;
+
+              const laneLeft = i * laneWidth;
+              const laneRight = (i + 1) * laneWidth;
+              const textY = yBottom;
+
+              const arrowChar = '◀';
+              const arrowWidth = ctx.measureText(arrowChar).width;
+              const totalFullWidth = arrowWidth + arrowSpacing + nameWidth;
+
+              // ① 通常配置（右側）の判定
+              const rightSideX = x + currentWidth + 6;
+              const fitsOnRight = rightSideX + totalFullWidth <= laneRight - 4;
+
+              // ② 反転配置（左側）の判定
+              const leftSideX = x - totalFullWidth - 6;
+              const fitsOnLeft = leftSideX >= laneLeft + 4;
+
+              // シャドウ設定（視認性確保）
+              ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+              ctx.shadowBlur = 4;
+              ctx.shadowOffsetX = 1;
+              ctx.shadowOffsetY = 1;
+
+              if (fitsOnRight) {
+                // 【パターンA: 右側に綺麗に収まる場合】 ◀ (奏法名)
+                ctx.fillStyle = note.articulation.borderColor;
+                ctx.fillText(arrowChar, rightSideX, textY);
+
+                ctx.fillStyle = '#E3EFFF';
+                ctx.fillText(tagText, rightSideX + arrowWidth + arrowSpacing, textY);
+              } else if (fitsOnLeft) {
+                // 【パターンB: 左側に反転して収まる場合】 (奏法名) ▶
+                const arrowLeft = '▶';
+                const arrowLeftWidth = ctx.measureText(arrowLeft).width;
+
+                ctx.fillStyle = '#E3EFFF';
+                ctx.fillText(tagText, leftSideX, textY);
+
+                ctx.fillStyle = note.articulation.borderColor;
+                ctx.fillText(arrowLeft, leftSideX + nameWidth + arrowSpacing, textY);
+              } else {
+                // 【パターンC: 左右どちらに振ってもはみ出す場合】 ◀ のみ表示
+                // ノーツの右脇に余裕があれば右脇、なければ左脇に「◀︎」を配置
+                let singleArrowX = x + currentWidth + 4;
+                if (singleArrowX + arrowWidth > laneRight - 2) {
+                  singleArrowX = Math.max(laneLeft + 2, x - arrowWidth - 4);
+                }
+
+                // キースイッチの固有色で「◀︎」のみを描画
+                ctx.fillStyle = note.articulation.borderColor;
+                ctx.fillText(arrowChar, singleArrowX, textY);
+              }
+
+              ctx.restore();
+            }
 
             ctx.globalAlpha = 1.0;
             ctx.shadowBlur = 0;
@@ -444,8 +522,8 @@ export const CanvasVisualizer: React.FC<Props> = ({
             width: '100%',
             height: 30,
             flexShrink: 0,
-            borderBottom: '1px solid #36485E',
-            background: isChromaKeyEnabled ? '#CBD7E6' : '#36485E'
+            borderBottom: '1px solid #181822',
+            background: isChromaKeyEnabled ? '#CBD7E6' : '#373f55'
           }}
         >
           {lanes.map((lane, index) => (
@@ -456,12 +534,30 @@ export const CanvasVisualizer: React.FC<Props> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                borderLeft: index > 0 ? (isChromaKeyEnabled ? '1px solid rgba(0,0,0,0.2)' : '1px solid #243B54') : 'none',
                 position: 'relative',
-                overflow: 'hidden',
+                // ★ overflow: 'hidden' があると左半分が切り取られるため visible にする
+                overflow: 'visible',
                 padding: '0 6px'
               }}
             >
+              {/* 縦の仕切り線 */}
+              {index > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    bottom: 3,
+                    width: 2, // ★ 線の太さ（例: 2px や 3px など）
+                    // ★ 自身の幅の半分だけ左にずらし、境界線を中心に左右均等に広げる
+                    transform: 'translateX(-50%)',
+                    background: isChromaKeyEnabled ? 'rgba(0,0,0,0.2)' : '#50587c',
+                    pointerEvents: 'none',
+                    zIndex: 2
+                  }}
+                />
+              )}
+
               <div
                 style={{
                   fontSize: 11,
@@ -471,6 +567,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
                     : lane.isAssigned ? '#E2EFFF' : '#8FA4C4',
                   whiteSpace: 'nowrap',
                   textOverflow: 'ellipsis',
+                  // ★ タイトルのテキストのはみ出し防止はここで担保
                   overflow: 'hidden',
                   maxWidth: '100%',
                   textAlign: 'center'
@@ -479,7 +576,7 @@ export const CanvasVisualizer: React.FC<Props> = ({
                 {lane.title}
               </div>
 
-              {/* レーン下部のカスタムカラーライン（複数Chの場合は全色をグラデーション表示） */}
+              {/* レーン下部のカスタムカラーライン */}
               <div
                 style={{
                   position: 'absolute',

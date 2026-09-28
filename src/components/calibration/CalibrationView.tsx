@@ -7,9 +7,9 @@ const serialMgr = new CalibrationSerialManager();
 // =====================================================
 // newotoge-web 統一カラーパレット
 // =====================================================
-const APP_BG = '#0A0E1A';               // アプリ標準の最深背景色
-const HEADER_BG = '#141D34';            // トランスポートバーと同系統のディープネイビー
-const HEADER_BORDER = '#243254';        // UI区切り線ボーダー
+const APP_BG = '#080B14';               // アプリ標準の最深背景色
+const HEADER_BG = '#1E202C';            // トランスポートバーと同系統のディープネイビー
+const HEADER_BORDER = '#50587c';        // UI区切り線ボーダー
 const GRID_HEADER_BG = '#121727';       // テーブルヘッダーのトーン
 
 const ROW_BG_EVEN = '#141622';          // トラックカード（無効時）と同等のダークスレート
@@ -18,9 +18,9 @@ const CELL_BG_EVEN = '#1B1E30';         // セル背景（偶数）
 const CELL_BG_ODD = '#21253B';          // セル背景（奇数）
 const BORDER_SUBTLE = '#191f33';        // 繊細な境界線
 
-const TEXT_MAIN = '#E2EFFF';            // メインテキスト
-const TEXT_MUTED = '#8FA4C4';           // サブテキスト・単位ラベル
-const TEXT_ACCENT_BLUE = '#A4D3FF';     // 強調ブルー
+const TEXT_MAIN = '#E3EFFF';            // メインテキスト
+const TEXT_MUTED = '#becfe5';           // サブテキスト・単位ラベル
+const TEXT_ACCENT_BLUE = '#a0b3cd';     // 強調ブルー
 
 const ACCENT_GREEN = '#9bc4dc';         // アクティブ/ニュートラル発光色
 const ACCENT_GREEN_TEXT = '#0B2314';    // グリーン背景上の文字色

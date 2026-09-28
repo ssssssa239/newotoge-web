@@ -23,6 +23,7 @@ export interface LaneSlot {
   // ★ 追加: 音域分割用プロパティ
   isPitchSplitEnabled?: boolean;
   pitchSplitRules?: PitchSplitRule[];
+  keySwitchPresetName?: string;
 }
 
 export interface EnsemblePreset {
@@ -36,6 +37,13 @@ export interface PresetsStorageData {
   presets: EnsemblePreset[];
 }
 
+// 奏法情報
+export interface NoteArticulation {
+  noteNumber: number; // キースイッチのノート番号 (2〜10)
+  name: string;       // 奏法名 (例: "Mute", "Slide")
+  borderColor: string;// 枠線の色
+}
+
 export interface MidiNote {
   id: number;
   trackIndex: number;
@@ -47,6 +55,7 @@ export interface MidiNote {
   startTimeMs: number;
   endTimeMs: number;
   durationMs: number;
+  articulation?: NoteArticulation;
 }
 
 export interface MidiTrackInfo {
